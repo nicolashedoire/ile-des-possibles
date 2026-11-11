@@ -4,6 +4,7 @@ import IslandScene from '@/components/IslandScene'
 import ScenarioCompare from '@/components/ScenarioCompare'
 import { importEnergyData } from '@/lib/import-energy-data'
 import { simulateDay, type BatteryConfig, type HourInput, type HourResult } from '@/lib/timeline'
+import { previewWhatIf } from '@/lib/what-if'
 
 type Site = 'production' | 'consommation' | 'batterie'
 type Panel = Site | 'data' | 'compare' | 'help' | null
@@ -42,15 +43,56 @@ function ValueField({ label, unit, value, onChange, max = 1000 }: { label: strin
   return <label className="control-field"><span>{label}</span><span className="input-wrap"><input type="number" min="0" max={max} step="1" value={value} onChange={event => {const n = Number(event.target.value); if (Number.isFinite(n)) onChange(Math.min(max, Math.max(0, n)))}} /><small>{unit}</small></span></label>
 }
 
-function IntegratedChart({ steps, index, capacity, playing, speed, onChange, onPlay, onSpeed }: { steps: HourResult[]; index: number; capacity: number; playing: boolean; speed: number; onChange: (i: number) => void; onPlay: () => void; onSpeed: () => void }) {
-  const maxPower = Math.max(1, ...steps.flatMap(step => [step.productionMW, step.consumptionMW]))
+type Curve = 'productionMW' | 'consumptionMW'
+type Draft = { index: number; changes: Partial<Record<Curve, number>> }
+
+function IntegratedChart({ steps, reference, index, capacity, playing, speed, editing, curve, draft, onChange, onPlay, onSpeed, onEdit, onRestore }: { steps: HourResult[]; reference: HourResult[]; index: number; capacity: number; playing: boolean; speed: number; editing: boolean; curve: Curve; draft: Draft | null; onChange: (i: number) => void; onPlay: () => void; onSpeed: () => void; onEdit: (i: number, value: number) => void; onRestore: (draft: Draft | null) => void }) {
+  // The reference is immutable during the trial, keeping the scale fixed under the pointer.
+  const rawMax = Math.max(0, ...reference.flatMap(step => [step.productionMW, step.consumptionMW]))
+  const maxPower = rawMax > 0 ? Math.max(10, Math.ceil(rawMax * 1.25 / 10) * 10) : 10
   const x = (i: number) => steps.length === 1 ? 500 : 10 + 980 * i / (steps.length - 1)
   const powerY = (n: number) => 88 - n / maxPower * 75
   const chargeY = (n: number) => 88 - (capacity > 0 ? Math.min(1, n / capacity) : 0) * 75
-  const points = (get: (step: HourResult) => number, y: (n: number) => number) => steps.map((step, i) => `${x(i)},${y(get(step))}`).join(' ')
-  return <div className="chart-overlay" aria-label="Graphique horaire interactif">
+  const points = (data: HourResult[], get: (step: HourResult) => number, y: (n: number) => number) => data.map((step, i) => `${x(i)},${y(get(step))}`).join(' ')
+  const svg = useRef<SVGSVGElement>(null)
+  const drag = useRef<{ pointer: number; index: number; x: number; y: number; moved: boolean; before: Draft | null } | null>(null)
+  const suppressClick = useRef(false)
+  const pointIndex = (clientX: number) => {
+    const rect = svg.current!.getBoundingClientRect()
+    if (steps.length === 1) return 0
+    return Math.max(0, Math.min(steps.length - 1, Math.round((((clientX - rect.left) / rect.width * 1000 - 10) / 980) * (steps.length - 1))))
+  }
+  const pointValue = (clientY: number) => {
+    const rect = svg.current!.getBoundingClientRect()
+    return Math.round(Math.max(0, Math.min(maxPower, (88 - (clientY - rect.top) / rect.height * 100) / 75 * maxPower)) * 10) / 10
+  }
+  return <div className={`chart-overlay ${editing ? 'is-editing' : ''}`} aria-label="Graphique horaire interactif">
     <div className="chart-top"><div className="chart-label"><span className="chart-dot"/> JOURNÉE <span className="chart-current">/ {steps[index].hour}</span></div><div className="legend" aria-label="Légende"><span><i className="legend-production"/><b className="legend-long">Production</b><b className="legend-short">Prod.</b> <small>MW</small></span><span><i className="legend-consumption"/><b className="legend-long">Consommation</b><b className="legend-short">Conso.</b> <small>MW</small></span><span><i className="legend-battery"/><b className="legend-long">Batterie</b><b className="legend-short">Stock</b> <small>MWh</small></span></div><div className="timeline-controls"><button className="control-icon" aria-label="Heure précédente" title="Heure précédente" onClick={() => onChange(index - 1)} disabled={index <= 0}><ChevronLeft size={15}/></button><button className="play-control" aria-label={playing ? 'Mettre en pause' : 'Lire la journée'} title={playing ? 'Pause' : 'Lire la journée'} onClick={onPlay}>{playing ? <Pause size={14} fill="currentColor"/> : <Play size={14} fill="currentColor"/>}</button><button className="control-icon" aria-label="Heure suivante" title="Heure suivante" onClick={() => onChange(index + 1)} disabled={index >= steps.length - 1}><ChevronRight size={15}/></button><button className="speed" aria-label={`Vitesse ${fmt(speed)} fois. Changer la vitesse`} onClick={onSpeed}>{fmt(speed)}×</button></div></div>
-    <div className="chart-plot"><span className="scale-power">0–{fmt(maxPower)} MW</span><span className="scale-battery">0–{fmt(capacity)} MWh</span><svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><line x1="10" x2="990" y1="88" y2="88" className="chart-grid"/><line x1="10" x2="990" y1="50" y2="50" className="chart-grid subtle"/><line x1={x(index)} x2={x(index)} y1="8" y2="91" className="chart-marker"/><polyline points={points(s => s.productionMW, powerY)} className="line-production"/><polyline points={points(s => s.consumptionMW, powerY)} className="line-consumption"/><polyline points={points(s => s.batteryEndMWh, chargeY)} className="line-battery"/><circle cx={x(index)} cy={powerY(steps[index].productionMW)} r="4" className="point-production"/><circle cx={x(index)} cy={powerY(steps[index].consumptionMW)} r="4" className="point-consumption"/><circle cx={x(index)} cy={chargeY(steps[index].batteryEndMWh)} r="4" className="point-battery"/></svg><div className="chart-hits" role="group" aria-label="Choisir une heure">{steps.map((step, i) => <button key={step.hour} onClick={() => onChange(i)} aria-pressed={i === index} aria-label={`${step.hour} : production ${fmt(step.productionMW)} MW, consommation ${fmt(step.consumptionMW)} MW, batterie ${fmt(step.batteryEndMWh)} MWh${step.unservedMW > eps ? ', demande non couverte' : ''}`} title={step.hour}><span>{steps.length <= 8 || i % 4 === 0 || i === steps.length - 1 ? step.hour.slice(0, 2) : ''}</span></button>)}</div></div>
+    <div className="chart-plot" onPointerDown={event => {
+      if (!editing || event.button !== 0 || !svg.current) return
+      const i = pointIndex(event.clientX)
+      onChange(i)
+      if (draft && i !== draft.index) return
+      event.currentTarget.setPointerCapture(event.pointerId)
+      drag.current = { pointer: event.pointerId, index: i, x: event.clientX, y: event.clientY, moved: false, before: draft }
+    }} onPointerMove={event => {
+      const active = drag.current
+      if (!active || active.pointer !== event.pointerId) return
+      if (!active.moved && Math.hypot(event.clientX - active.x, event.clientY - active.y) < 4) return
+      active.moved = true
+      onEdit(active.index, pointValue(event.clientY))
+    }} onPointerUp={event => {
+      if (drag.current?.pointer !== event.pointerId) return
+      suppressClick.current = drag.current.moved
+      if (suppressClick.current) window.setTimeout(() => { suppressClick.current = false }, 0)
+      drag.current = null
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    }} onPointerCancel={event => {
+      if (drag.current?.pointer !== event.pointerId) return
+      onRestore(drag.current.before)
+      drag.current = null
+      suppressClick.current = false
+    }}><span className="scale-power">0–{fmt(maxPower)} MW</span><span className="scale-battery">0–{fmt(capacity)} MWh</span><svg ref={svg} viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><line x1="10" x2="990" y1="88" y2="88" className="chart-grid"/><line x1="10" x2="990" y1="50" y2="50" className="chart-grid subtle"/><line x1={x(index)} x2={x(index)} y1="8" y2="91" className="chart-marker"/>{draft && <><polyline points={points(reference, s => s.productionMW, powerY)} className="line-production line-reference"/><polyline points={points(reference, s => s.consumptionMW, powerY)} className="line-consumption line-reference"/><polyline points={points(reference, s => s.batteryEndMWh, chargeY)} className="line-battery line-reference"/></>}<polyline points={points(steps, s => s.productionMW, powerY)} className="line-production"/><polyline points={points(steps, s => s.consumptionMW, powerY)} className="line-consumption"/><polyline points={points(steps, s => s.batteryEndMWh, chargeY)} className="line-battery"/><circle cx={x(index)} cy={powerY(steps[index].productionMW)} r="4" className="point-production"/><circle cx={x(index)} cy={powerY(steps[index].consumptionMW)} r="4" className="point-consumption"/><circle cx={x(index)} cy={chargeY(steps[index].batteryEndMWh)} r="4" className="point-battery"/></svg><div className="chart-hits" role="group" aria-label={editing ? 'Choisir une heure, puis flèches haut ou bas pour modifier la courbe' : 'Choisir une heure'}>{steps.map((step, i) => <button key={step.hour} onClick={() => { if (suppressClick.current) { suppressClick.current = false; return } onChange(i) }} onKeyDown={event => { if (!editing || (draft && i !== draft.index) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return; event.preventDefault(); onChange(i); onEdit(i, Math.max(0, Math.min(maxPower, Math.round((step[curve] + (event.key === 'ArrowUp' ? 1 : -1)) * 10) / 10))) }} aria-pressed={i === index} aria-label={`${step.hour} : production ${fmt(step.productionMW)} MW, consommation ${fmt(step.consumptionMW)} MW, batterie ${fmt(step.batteryEndMWh)} MWh${step.unservedMW > eps ? ', demande non couverte' : ''}${editing ? (draft && i !== draft.index ? '. Appliquez ou annulez pour modifier cette heure' : '. Flèches haut et bas pour modifier') : ''}`} title={step.hour}><span>{steps.length <= 8 || i % 4 === 0 || i === steps.length - 1 ? step.hour.slice(0, 2) : ''}</span></button>)}</div></div>
   </div>
 }
 
@@ -70,12 +112,15 @@ function App() {
   const [selected, setSelected] = useState<Site>('production')
   const [panel, setPanel] = useState<Panel>(null)
   const [more, setMore] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [curve, setCurve] = useState<Curve>('productionMW')
+  const [draft, setDraft] = useState<Draft | null>(null)
   const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 700px)').matches)
   const [validation, setValidation] = useState<{ key: string; state: 'busy' | 'reload' | 'success' | 'error'; message: string } | null>(null)
 
   const load = async (getFile: () => Promise<File>, name: string) => {
     const seq = ++loadSequence.current
-    setLoading(true); setLoadError(''); setLoadStatus('Chargement…'); setPlaying(false)
+    setLoading(true); setEditing(false); setLoadError(''); setLoadStatus('Chargement…'); setPlaying(false)
     try {
       const file = await getFile()
       const parsed = await importEnergyData(file)
@@ -105,6 +150,8 @@ function App() {
     return () => media.removeEventListener('change', change)
   }, [])
   const day = useMemo(() => rows.length ? simulateDay(rows, battery) : null, [rows, battery])
+  const trial = useMemo(() => draft && rows.length ? previewWhatIf(rows, battery, draft.index, draft.changes) : null, [rows, battery, draft])
+  const displayedDay = trial?.preview ?? day
   const validationKey = JSON.stringify({ rows, battery })
   const activeValidation = validation?.key === validationKey ? validation : null
   const verifyDay = async () => {
@@ -126,7 +173,7 @@ function App() {
     try { sessionStorage.setItem(savedDayKey, JSON.stringify({ rows, originalRows, battery, hourIndex, fileName } satisfies SavedDay)); window.location.reload() }
     catch { setValidation({ key: validationKey, state: 'error', message: 'Impossible de conserver la journée.' }) }
   }
-  const step = day?.steps[Math.min(hourIndex, day.steps.length - 1)]
+  const step = displayedDay?.steps[Math.min(hourIndex, displayedDay.steps.length - 1)]
   const outcome = step ? consequence(step, battery) : null
   const modified = rows.some((row, i) => row.productionMW !== originalRows[i]?.productionMW || row.consumptionMW !== originalRows[i]?.consumptionMW)
   useEffect(() => {
@@ -138,21 +185,44 @@ function App() {
   const selectHour = (next: number) => { setHourIndex(Math.max(0, Math.min(rows.length - 1, next))); setPlaying(false) }
   const updateHour = (key: 'productionMW' | 'consumptionMW', value: number) => setRows(current => current.map((row, i) => i === hourIndex ? { ...row, [key]: value } : row))
   const updateBattery = (key: 'capacityMWh' | 'initialMWh' | 'maxChargeMW' | 'maxDischargeMW', value: number) => setBattery(current => ({ ...current, [key]: value, ...(key === 'capacityMWh' ? { initialMWh: Math.min(current.initialMWh, value) } : {}), ...(key === 'initialMWh' ? { initialMWh: Math.min(current.capacityMWh, value) } : {}) }))
-  const selectSite = (site: Site) => { setSelected(site); setPanel(site); setMore(false) }
+  const selectSite = (site: Site) => { setSelected(site); if (!editing) setPanel(site); setMore(false) }
+  const editPoint = (index: number, value: number) => {
+    setPanel(null)
+    setPlaying(false)
+    setDraft(current => {
+      if (current && current.index !== index) return current
+      const changes = { ...current?.changes, [curve]: value }
+      if (changes.productionMW === rows[index].productionMW) delete changes.productionMW
+      if (changes.consumptionMW === rows[index].consumptionMW) delete changes.consumptionMW
+      return Object.keys(changes).length ? { index, changes } : null
+    })
+  }
   const reset = () => { setRows(originalRows.map(row => ({ ...row }))); setBattery(initialBattery); setPlaying(false) }
   const inspector = panel === 'production' || panel === 'consommation' || panel === 'batterie'
+  const shortageLabel = (shortage: { hour: string; minutesIntoHour: number } | null) => {
+    if (!shortage) return 'aucune'
+    const minute = Math.round(shortage.minutesIntoHour)
+    const hours = Number(shortage.hour.slice(0, 2)) + Math.floor(minute / 60)
+    return `${String(hours).padStart(2, '0')}h${String(minute % 60).padStart(2, '0')}`
+  }
   const stepLabel = step ? `${step.hour.slice(0, 2)}h` : '—'
   const siteName: Record<Site, string> = { production: 'Production', consommation: 'Consommation', batterie: 'Batterie' }
   const panelName: Record<Exclude<Panel, null>, string> = { ...siteName, data: 'Données', compare: 'Comparer', help: 'Le modèle' }
 
-  return <div className="app-shell"><header className="topbar"><a href="#accueil" className="brand" aria-label="Île, accueil"><span className="brand-mark">◈</span>île<span className="brand-dot">.</span></a><span className="top-divider"/><span className="top-label">Laboratoire énergétique</span><div className="top-right"><span className="source-name" title={fileName}><span/> {loading ? 'Chargement' : fileName}</span><button className={`top-action ${panel === 'data' ? 'active' : ''}`} onClick={() => setPanel(panel === 'data' ? null : 'data')} aria-label="Données" title="Données"><Database size={16}/><span>Données</span></button><button className={`top-action ${panel === 'compare' ? 'active' : ''}`} onClick={() => setPanel(panel === 'compare' ? null : 'compare')} aria-label="Comparer les journées" title="Comparer les journées"><GitCompareArrows size={16}/><span>Comparer</span></button><button className={`top-action icon-only ${panel === 'help' ? 'active' : ''}`} onClick={() => setPanel(panel === 'help' ? null : 'help')} aria-label="À propos du modèle" title="À propos du modèle"><CircleHelp size={17}/></button></div></header>
+  return <div className="app-shell"><header className="topbar"><a href="#accueil" className="brand" aria-label="Île, accueil"><span className="brand-mark">◈</span>île<span className="brand-dot">.</span></a><span className="top-divider"/><span className="top-label">Laboratoire énergétique</span><div className="top-right"><span className="source-name" title={fileName}><span/> {loading ? 'Chargement' : fileName}</span><button className={`top-action ${panel === 'data' ? 'active' : ''}`} onClick={() => setPanel(panel === 'data' ? null : 'data')} disabled={!!draft} aria-label="Données" title="Données"><Database size={16}/><span>Données</span></button><button className={`top-action ${panel === 'compare' ? 'active' : ''}`} onClick={() => setPanel(panel === 'compare' ? null : 'compare')} disabled={!!draft} aria-label="Comparer les journées" title="Comparer les journées"><GitCompareArrows size={16}/><span>Comparer</span></button><button className={`top-action icon-only ${panel === 'help' ? 'active' : ''}`} onClick={() => setPanel(panel === 'help' ? null : 'help')} disabled={!!draft} aria-label="À propos du modèle" title="À propos du modèle"><CircleHelp size={17}/></button></div></header>
     <main id="accueil" className="experience" aria-label="Île énergétique interactive">
-      {step && day && outcome ? <>
+      {step && day && displayedDay && outcome ? <>
         <div className="world"><IslandScene productionMW={step.productionMW} consumptionMW={step.consumptionMW} batteryMWh={step.batteryEndMWh} deficitMW={Math.max(0, step.consumptionMW - step.productionMW)} chargeMW={step.chargeMW} dischargeMW={step.dischargeMW} unservedMW={step.unservedMW} selected={selected} onSelect={selectSite} annotationBottomInset={165} annotationRightInset={inspector && !narrow ? 290 : 0}/></div>
         <div className="world-meta"><span><i/> SIMULATION</span><strong>{stepLabel}<small> — {String(Number(step.hour.slice(0, 2)) + 1).padStart(2, '0')}h</small></strong></div>
         <div className="world-values" aria-label="Valeurs à l’heure sélectionnée"><button className={selected === 'production' && panel === 'production' ? 'active' : ''} onClick={() => selectSite('production')}><Wind size={15}/><span>Production</span><strong>{fmt(step.productionMW)}<small> MW</small></strong></button><button className={selected === 'consommation' && panel === 'consommation' ? 'active' : ''} onClick={() => selectSite('consommation')}><Factory size={15}/><span>Consommation</span><strong>{fmt(step.consumptionMW)}<small> MW</small></strong></button><button className={selected === 'batterie' && panel === 'batterie' ? 'active' : ''} onClick={() => selectSite('batterie')}><Battery size={15}/><span>Batterie</span><strong>{fmt(step.batteryEndMWh)}<small> MWh</small></strong></button></div>
-        <button className={`outcome ${outcome.danger ? 'danger' : ''}`} onClick={() => setMore(!more)} aria-expanded={more} aria-label={`${outcome.title} : ${outcome.detail}`}><span className="outcome-dot"/><span><strong>{outcome.title}</strong>{more && <small>{outcome.detail}</small>}</span><ChevronDown size={14} className={more ? 'rotate' : ''}/></button>
-        <IntegratedChart steps={day.steps} index={hourIndex} capacity={battery.capacityMWh} playing={playing} speed={speed} onChange={selectHour} onPlay={() => {if (hourIndex >= rows.length - 1) setHourIndex(0); setPlaying(!playing)}} onSpeed={() => setSpeed(speed === 1 ? 2 : speed === 2 ? .5 : 1)}/>
+        <button className={`outcome ${outcome.danger ? 'danger' : ''}`} onClick={() => setMore(!more)} aria-expanded={more} aria-label={`${outcome.title} : ${outcome.detail}`}><span className="outcome-dot"/><span><strong>{outcome.title} <em>Pourquoi ?</em></strong>{more && <small>Déficit {fmt(Math.max(0, step.consumptionMW - step.productionMW))} MW · réserve {fmt(step.batteryStartMWh)} MWh · décharge max. {fmt(battery.maxDischargeMW)} MW<br/>{outcome.detail}</small>}</span><ChevronDown size={14} className={more ? 'rotate' : ''}/></button>
+        <div className={`whatif ${editing ? 'active' : ''}`}>
+          {!editing ? <button className="whatif-start" disabled={loading} onClick={() => { setEditing(true); setPanel(null); setPlaying(false) }}>✳ &nbsp;Et si ? <span>Modifier une courbe</span></button> : <>
+            <div className="whatif-controls"><span className="whatif-title" title={draft ? 'Une heure modifiée à la fois' : undefined}>{draft ? `1 H · ${rows[draft.index].hour.slice(0, 2)}H` : 'ET SI ?'}</span><div className="curve-switch" aria-label="Courbe à modifier"><button aria-pressed={curve === 'productionMW'} onClick={() => setCurve('productionMW')}>Production</button><button aria-pressed={curve === 'consumptionMW'} onClick={() => setCurve('consumptionMW')}>Conso.</button></div><span className="whatif-hint">{draft ? `Une heure à la fois · ${rows[draft.index].hour}` : 'Glisser un point · ↑↓ au clavier'}</span><div className="whatif-actions">{draft ? <><button onClick={() => setDraft(null)}>Annuler</button><button className="apply" onClick={() => { if (trial) setRows(trial.rows); setDraft(null); setEditing(false); setPlaying(false) }}>Appliquer</button></> : <button onClick={() => setEditing(false)} aria-label="Fermer le mode Et si">Fermer</button>}</div></div>
+            {trial && <div className="trial-summary" role="status"><span><i/> Réf. <i/> Essai</span><span>Manque : <strong>{fmt(trial.baseline.summary.totalUnservedMWh)} → {fmt(trial.preview.summary.totalUnservedMWh)} MWh</strong></span><span title="Début de la première pénurie">Alerte : <strong>{shortageLabel(trial.comparison.firstShortageBaseline)} → {shortageLabel(trial.comparison.firstShortagePreview)}</strong></span></div>}
+          </>}
+        </div>
+        <IntegratedChart steps={displayedDay.steps} reference={day.steps} index={hourIndex} capacity={battery.capacityMWh} playing={playing} speed={speed} editing={editing} curve={curve} draft={draft} onChange={selectHour} onEdit={editPoint} onRestore={setDraft} onPlay={() => {if (hourIndex >= rows.length - 1) setHourIndex(0); setPlaying(!playing)}} onSpeed={() => setSpeed(speed === 1 ? 2 : speed === 2 ? .5 : 1)}/>
         {inspector && <aside className="inspector-panel" aria-label={`Réglages ${panelName[panel]}`}><div className="panel-top"><div><small>RÉGLAGES · {panel === 'batterie' ? 'JOURNÉE' : stepLabel}</small><h2>{panelName[panel]}</h2></div><button className="close" onClick={() => setPanel(null)} aria-label="Fermer les réglages"><X size={16}/></button></div><div className="panel-fields">{panel === 'production' && <><ValueField label="Puissance" unit="MW" value={step.productionMW} onChange={value => updateHour('productionMW', value)}/><button className="scenario-action" onClick={() => updateHour('productionMW', Math.round(step.productionMW * .5 * 10) / 10)}><CloudOff size={15}/> Baisse de 50 % <ArrowDownRight size={14}/></button></>}{panel === 'consommation' && <><ValueField label="Demande" unit="MW" value={step.consumptionMW} onChange={value => updateHour('consumptionMW', value)}/><button className="scenario-action" onClick={() => updateHour('consumptionMW', Math.min(1000, Math.round((step.consumptionMW + 10) * 10) / 10))}><Zap size={15}/> Pointe de 10 MW <ArrowDownRight size={14}/></button></>}{panel === 'batterie' && <><ValueField label="Capacité" unit="MWh" value={battery.capacityMWh} onChange={value => updateBattery('capacityMWh', value)}/><ValueField label="Réserve initiale" unit="MWh" value={battery.initialMWh} onChange={value => updateBattery('initialMWh', value)} max={battery.capacityMWh}/><ValueField label="Charge max." unit="MW" value={battery.maxChargeMW} onChange={value => updateBattery('maxChargeMW', value)}/><ValueField label="Décharge max." unit="MW" value={battery.maxDischargeMW} onChange={value => updateBattery('maxDischargeMW', value)}/><small className="efficiency">Rendements de charge et décharge : 95 %</small></>}</div><button className="reset-action" disabled={!modified && JSON.stringify(battery) === JSON.stringify(initialBattery)} onClick={reset}><RotateCcw size={13}/> Rétablir les valeurs</button></aside>}
         {panel === 'compare' && <div className="dialog-backdrop" onClick={() => setPanel(null)}><div className="dialog-panel compare-dialog" role="dialog" aria-modal="true" aria-label="Comparer les journées" onClick={e => e.stopPropagation()}><button className="dialog-close" onClick={() => setPanel(null)} aria-label="Fermer"><X size={16}/></button><ScenarioCompare rows={rows} battery={battery} day={day} onApply={(referenceRows, referenceBattery) => {setRows(referenceRows); setBattery(referenceBattery); setHourIndex(0); setPlaying(false); setPanel(null)}}/></div></div>}
       </> : <div className="loading-state" role="status"><span className="loader"/>{loading ? loadStatus : 'Aucune donnée chargée'}</div>}

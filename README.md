@@ -19,6 +19,12 @@ Une journée fictive de 24 heures se charge automatiquement à l'ouverture : auc
 - Vérifiez facultativement les bilans horaires avec Z3 : cette vérification porte sur les règles du modèle, pas sur la réalité ou une stratégie optimale.
 - Importez facultativement un autre CSV depuis votre appareil. Vous pouvez exporter et partager une référence de journée par fichier ; il n'y a pas de collaboration en direct.
 
+### Pourquoi ? Et si ?
+
+Ouvrez **Pourquoi ?** pour comprendre le bilan de l'heure sélectionnée. Avec **Et si ?**, choisissez la production ou la consommation et faites glisser un point du graphique ; les flèches haut et bas permettent aussi de le modifier au clavier. L'essai porte sur une heure à la fois, avec la possibilité de modifier les deux courbes à cette heure.
+
+La journée entière est recalculée : les courbes en pointillés montrent la référence, et le résumé compare l'énergie non servie et le début de la première pénurie. Parcourez les autres heures pour observer les conséquences sur la batterie et le reste de la journée, puis choisissez **Appliquer** ou **Annuler**. La référence reste intacte pendant l'essai.
+
 Les données d'exemple sont **fictives**. Elles sont déficitaires à toutes les heures : la réserve s'épuise progressivement. Pour explorer aussi la recharge, choisissez une heure et augmentez la production au-dessus de la consommation ; la batterie absorbera alors le surplus dans les limites de sa capacité et de sa puissance de charge.
 
 La maquette 3D a été générée avec Meshy à partir de l'image de couverture, puis optimisée pour le Web. Les installations peuvent être sélectionnées directement ; les pales sont fixes car le modèle généré est un maillage unique. Les indications de flux restent schématiques : elles ne constituent pas un calcul détaillé de réseau électrique.
