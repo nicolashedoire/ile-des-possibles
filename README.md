@@ -4,6 +4,7 @@
   <h1>Île · Un monde à comprendre</h1>
   <p><strong>Comprendre un système en jouant avec ses équilibres.</strong></p>
   <p>Un prototype interactif et pédagogique autour de l'énergie, du stockage et des conséquences de nos choix.</p>
+  <p><a href="https://nicolashedoire.github.io/ile-des-possibles/"><strong>Découvrir le prototype →</strong></a></p>
 </div>
 
 ---
