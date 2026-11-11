@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { previewWhatIf } from './what-if.ts'
+import { previewWhatIf, previewWhatIfMany } from './what-if.ts'
 import type { BatteryConfig, HourInput } from './timeline.ts'
 
 const battery: BatteryConfig = { capacityMWh: 120, initialMWh: 100, maxChargeMW: 20, maxDischargeMW: 20, chargeEfficiency: .95, dischargeEfficiency: .95 }
@@ -73,4 +73,52 @@ test('rejects invalid hours, powers and changes and validates the shared battery
   assert.throws(() => previewWhatIf(exampleRows, battery, 1, { consumptionMW: NaN }), RangeError)
   assert.throws(() => previewWhatIf(exampleRows, { ...battery, initialMWh: 121 }, 1, {}), RangeError)
   assert.throws(() => previewWhatIf(exampleRows, battery, 1, { extra: 1 } as never), TypeError)
+})
+
+test('multiple changes share a single chronological simulation, regardless of edit order', () => {
+  const small: BatteryConfig = { capacityMWh: 10, initialMWh: 0, maxChargeMW: 10, maxDischargeMW: 10, chargeEfficiency: 1, dischargeEfficiency: 1 }
+  const rows: HourInput[] = [
+    { hour: '00:00', productionMW: 2, consumptionMW: 2 },
+    { hour: '01:00', productionMW: 0, consumptionMW: 8 },
+    { hour: '02:00', productionMW: 0, consumptionMW: 6 },
+  ]
+  const edits = [{ index: 2, productionMW: 2 }, { index: 0, productionMW: 12 }, { index: 1, consumptionMW: 6 }]
+  const beforeRows = structuredClone(rows)
+  const beforeEdits = structuredClone(edits)
+  const result = previewWhatIfMany(rows, small, edits)
+  assert.deepEqual(rows, beforeRows)
+  assert.deepEqual(edits, beforeEdits)
+  assert.deepEqual(result.preview.steps.map(step => step.batteryEndMWh), [10, 4, 0])
+  assert.deepEqual(result.preview.steps.map(step => step.unservedMW), [0, 0, 0])
+  assert.equal(result.baseline.summary.totalUnservedMWh, 14)
+  assert.equal(result.comparison.totalUnservedMWhDelta, -14)
+  assert.deepEqual(result.comparison.perHour.map(step => step.productionMWDelta), [10, 0, 2])
+  assert.deepEqual(result.comparison.perHour.map(step => step.consumptionMWDelta), [0, -2, 0])
+  assert.deepEqual(result.preview, previewWhatIfMany(rows, small, [...edits].reverse()).preview)
+})
+
+test('both curves can change at the same hour and removing edits restores the original scenario', () => {
+  const original = structuredClone(exampleRows)
+  const result = previewWhatIfMany(exampleRows, battery, [
+    { index: 8, productionMW: 37, consumptionMW: 40 },
+    { index: 9, consumptionMW: 42 },
+  ])
+  assert.equal(result.rows[8].productionMW, 37)
+  assert.equal(result.rows[8].consumptionMW, 40)
+  assert.equal(result.rows[9].consumptionMW, 42)
+  assert.deepEqual(exampleRows, original)
+  const reverted = previewWhatIfMany(exampleRows, battery, [])
+  assert.deepEqual(reverted.rows, original)
+  assert.deepEqual(reverted.preview, reverted.baseline)
+  assert.equal(reverted.comparison.totalUnservedMWhDelta, 0)
+})
+
+test('multi-hour edits reject invalid indices, duplicate hours and invalid powers', () => {
+  assert.throws(() => previewWhatIfMany(exampleRows, battery, [{ index: 8 }, { index: 8 }]), RangeError)
+  assert.throws(() => previewWhatIfMany(exampleRows, battery, [{ index: -1, productionMW: 0 }]), RangeError)
+  assert.throws(() => previewWhatIfMany(exampleRows, battery, [{ index: 24 }]), RangeError)
+  assert.throws(() => previewWhatIfMany(exampleRows, battery, [{ index: .5 }]), RangeError)
+  assert.throws(() => previewWhatIfMany(exampleRows, battery, [{ index: 2, productionMW: -1 }]), RangeError)
+  assert.throws(() => previewWhatIfMany(exampleRows, battery, [{ index: 2, consumptionMW: NaN }]), RangeError)
+  assert.throws(() => previewWhatIfMany(exampleRows, battery, [{ index: 2, extra: 1 } as never]), TypeError)
 })

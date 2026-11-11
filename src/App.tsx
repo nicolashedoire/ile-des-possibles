@@ -4,7 +4,7 @@ import IslandScene from '@/components/IslandScene'
 import ScenarioCompare from '@/components/ScenarioCompare'
 import { importEnergyData } from '@/lib/import-energy-data'
 import { simulateDay, type BatteryConfig, type HourInput, type HourResult } from '@/lib/timeline'
-import { previewWhatIf } from '@/lib/what-if'
+import { previewWhatIfMany } from '@/lib/what-if'
 
 type Site = 'production' | 'consommation' | 'batterie'
 type Panel = Site | 'data' | 'compare' | 'help' | null
@@ -44,7 +44,7 @@ function ValueField({ label, unit, value, onChange, max = 1000 }: { label: strin
 }
 
 type Curve = 'productionMW' | 'consumptionMW'
-type Draft = { index: number; changes: Partial<Record<Curve, number>> }
+type Draft = Array<{ index: number; changes: Partial<Record<Curve, number>> }>
 
 function IntegratedChart({ steps, reference, index, capacity, playing, speed, editing, curve, draft, onChange, onPlay, onSpeed, onEdit, onRestore }: { steps: HourResult[]; reference: HourResult[]; index: number; capacity: number; playing: boolean; speed: number; editing: boolean; curve: Curve; draft: Draft | null; onChange: (i: number) => void; onPlay: () => void; onSpeed: () => void; onEdit: (i: number, value: number) => void; onRestore: (draft: Draft | null) => void }) {
   // The reference is immutable during the trial, keeping the scale fixed under the pointer.
@@ -54,6 +54,12 @@ function IntegratedChart({ steps, reference, index, capacity, playing, speed, ed
   const powerY = (n: number) => 88 - n / maxPower * 75
   const chargeY = (n: number) => 88 - (capacity > 0 ? Math.min(1, n / capacity) : 0) * 75
   const points = (data: HourResult[], get: (step: HourResult) => number, y: (n: number) => number) => data.map((step, i) => `${x(i)},${y(get(step))}`).join(' ')
+  // Power is constant for each hour; transitions occur between hourly sample centres.
+  const powerPoints = (data: HourResult[], get: (step: HourResult) => number) => data.flatMap((step, i) => {
+    if (i === 0) return [`${x(i)},${powerY(get(step))}`]
+    const edge = (x(i - 1) + x(i)) / 2
+    return [`${edge},${powerY(get(data[i - 1]))}`, `${edge},${powerY(get(step))}`, `${x(i)},${powerY(get(step))}`]
+  }).join(' ')
   const svg = useRef<SVGSVGElement>(null)
   const drag = useRef<{ pointer: number; index: number; x: number; y: number; moved: boolean; before: Draft | null } | null>(null)
   const suppressClick = useRef(false)
@@ -67,12 +73,11 @@ function IntegratedChart({ steps, reference, index, capacity, playing, speed, ed
     return Math.round(Math.max(0, Math.min(maxPower, (88 - (clientY - rect.top) / rect.height * 100) / 75 * maxPower)) * 10) / 10
   }
   return <div className={`chart-overlay ${editing ? 'is-editing' : ''}`} aria-label="Graphique horaire interactif">
-    <div className="chart-top"><div className="chart-label"><span className="chart-dot"/> JOURNÉE <span className="chart-current">/ {steps[index].hour}</span></div><div className="legend" aria-label="Légende"><span><i className="legend-production"/><b className="legend-long">Production</b><b className="legend-short">Prod.</b> <small>MW</small></span><span><i className="legend-consumption"/><b className="legend-long">Consommation</b><b className="legend-short">Conso.</b> <small>MW</small></span><span><i className="legend-battery"/><b className="legend-long">Batterie</b><b className="legend-short">Stock</b> <small>MWh</small></span></div><div className="timeline-controls"><button className="control-icon" aria-label="Heure précédente" title="Heure précédente" onClick={() => onChange(index - 1)} disabled={index <= 0}><ChevronLeft size={15}/></button><button className="play-control" aria-label={playing ? 'Mettre en pause' : 'Lire la journée'} title={playing ? 'Pause' : 'Lire la journée'} onClick={onPlay}>{playing ? <Pause size={14} fill="currentColor"/> : <Play size={14} fill="currentColor"/>}</button><button className="control-icon" aria-label="Heure suivante" title="Heure suivante" onClick={() => onChange(index + 1)} disabled={index >= steps.length - 1}><ChevronRight size={15}/></button><button className="speed" aria-label={`Vitesse ${fmt(speed)} fois. Changer la vitesse`} onClick={onSpeed}>{fmt(speed)}×</button></div></div>
+    <div className="chart-top"><div className="chart-label"><span className="chart-dot"/> JOURNÉE <span className="chart-current">/ {steps[index].hour}</span></div><div className="legend" aria-label="Légende"><span><i className="legend-production"/><b className="legend-long">Production</b><b className="legend-short">Prod.</b> <small>MW</small></span><span><i className="legend-consumption"/><b className="legend-long">Consommation</b><b className="legend-short">Conso.</b> <small>MW</small></span><span title="Réserve en fin d’heure"><i className="legend-battery"/><b className="legend-long">Batterie</b><b className="legend-short">Stock</b> <small>MWh</small></span></div><div className="timeline-controls"><button className="control-icon" aria-label="Heure précédente" title="Heure précédente" onClick={() => onChange(index - 1)} disabled={index <= 0}><ChevronLeft size={15}/></button><button className="play-control" aria-label={playing ? 'Mettre en pause' : 'Lire la journée'} title={playing ? 'Pause' : 'Lire la journée'} onClick={onPlay}>{playing ? <Pause size={14} fill="currentColor"/> : <Play size={14} fill="currentColor"/>}</button><button className="control-icon" aria-label="Heure suivante" title="Heure suivante" onClick={() => onChange(index + 1)} disabled={index >= steps.length - 1}><ChevronRight size={15}/></button><button className="speed" aria-label={`Vitesse ${fmt(speed)} fois. Changer la vitesse`} onClick={onSpeed}>{fmt(speed)}×</button></div></div>
     <div className="chart-plot" onPointerDown={event => {
       if (!editing || event.button !== 0 || !svg.current) return
       const i = pointIndex(event.clientX)
       onChange(i)
-      if (draft && i !== draft.index) return
       event.currentTarget.setPointerCapture(event.pointerId)
       drag.current = { pointer: event.pointerId, index: i, x: event.clientX, y: event.clientY, moved: false, before: draft }
     }} onPointerMove={event => {
@@ -92,7 +97,7 @@ function IntegratedChart({ steps, reference, index, capacity, playing, speed, ed
       onRestore(drag.current.before)
       drag.current = null
       suppressClick.current = false
-    }}><span className="scale-power">0–{fmt(maxPower)} MW</span><span className="scale-battery">0–{fmt(capacity)} MWh</span><svg ref={svg} viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><line x1="10" x2="990" y1="88" y2="88" className="chart-grid"/><line x1="10" x2="990" y1="50" y2="50" className="chart-grid subtle"/><line x1={x(index)} x2={x(index)} y1="8" y2="91" className="chart-marker"/>{draft && <><polyline points={points(reference, s => s.productionMW, powerY)} className="line-production line-reference"/><polyline points={points(reference, s => s.consumptionMW, powerY)} className="line-consumption line-reference"/><polyline points={points(reference, s => s.batteryEndMWh, chargeY)} className="line-battery line-reference"/></>}<polyline points={points(steps, s => s.productionMW, powerY)} className="line-production"/><polyline points={points(steps, s => s.consumptionMW, powerY)} className="line-consumption"/><polyline points={points(steps, s => s.batteryEndMWh, chargeY)} className="line-battery"/><circle cx={x(index)} cy={powerY(steps[index].productionMW)} r="4" className="point-production"/><circle cx={x(index)} cy={powerY(steps[index].consumptionMW)} r="4" className="point-consumption"/><circle cx={x(index)} cy={chargeY(steps[index].batteryEndMWh)} r="4" className="point-battery"/></svg><div className="chart-hits" role="group" aria-label={editing ? 'Choisir une heure, puis flèches haut ou bas pour modifier la courbe' : 'Choisir une heure'}>{steps.map((step, i) => <button key={step.hour} onClick={() => { if (suppressClick.current) { suppressClick.current = false; return } onChange(i) }} onKeyDown={event => { if (!editing || (draft && i !== draft.index) || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return; event.preventDefault(); onChange(i); onEdit(i, Math.max(0, Math.min(maxPower, Math.round((step[curve] + (event.key === 'ArrowUp' ? 1 : -1)) * 10) / 10))) }} aria-pressed={i === index} aria-label={`${step.hour} : production ${fmt(step.productionMW)} MW, consommation ${fmt(step.consumptionMW)} MW, batterie ${fmt(step.batteryEndMWh)} MWh${step.unservedMW > eps ? ', demande non couverte' : ''}${editing ? (draft && i !== draft.index ? '. Appliquez ou annulez pour modifier cette heure' : '. Flèches haut et bas pour modifier') : ''}`} title={step.hour}><span>{steps.length <= 8 || i % 4 === 0 || i === steps.length - 1 ? step.hour.slice(0, 2) : ''}</span></button>)}</div></div>
+    }}><span className="scale-power">0–{fmt(maxPower)} MW</span><span className="scale-battery">0–{fmt(capacity)} MWh</span><svg ref={svg} viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><line x1="10" x2="990" y1="88" y2="88" className="chart-grid"/><line x1="10" x2="990" y1="50" y2="50" className="chart-grid subtle"/><line x1={x(index)} x2={x(index)} y1="8" y2="91" className="chart-marker"/>{draft && <><polyline points={powerPoints(reference, s => s.productionMW)} className="line-production line-reference"/><polyline points={powerPoints(reference, s => s.consumptionMW)} className="line-consumption line-reference"/><polyline points={points(reference, s => s.batteryEndMWh, chargeY)} className="line-battery line-reference"/></>}<polyline points={powerPoints(steps, s => s.productionMW)} className="line-production"/><polyline points={powerPoints(steps, s => s.consumptionMW)} className="line-consumption"/><polyline points={points(steps, s => s.batteryEndMWh, chargeY)} className="line-battery"/>{draft?.flatMap(edit => (['productionMW', 'consumptionMW'] as Curve[]).filter(key => edit.changes[key] !== undefined).map(key => <circle key={`${edit.index}-${key}`} cx={x(edit.index)} cy={powerY(steps[edit.index][key])} r="3" className={`point-edited ${key === 'productionMW' ? 'point-production' : 'point-consumption'}`}/>))}<circle cx={x(index)} cy={powerY(steps[index].productionMW)} r="4" className="point-production"/><circle cx={x(index)} cy={powerY(steps[index].consumptionMW)} r="4" className="point-consumption"/><circle cx={x(index)} cy={chargeY(steps[index].batteryEndMWh)} r="4" className="point-battery"/></svg><div className="chart-hits" role="group" aria-label={editing ? 'Choisir une heure, puis flèches haut ou bas pour modifier la courbe' : 'Choisir une heure'}>{steps.map((step, i) => <button key={step.hour} onClick={() => { if (suppressClick.current) { suppressClick.current = false; return } onChange(i) }} onKeyDown={event => { if (!editing || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return; event.preventDefault(); onChange(i); onEdit(i, Math.max(0, Math.min(maxPower, Math.round((step[curve] + (event.key === 'ArrowUp' ? 1 : -1)) * 10) / 10))) }} aria-pressed={i === index} aria-label={`${step.hour} : production ${fmt(step.productionMW)} MW, consommation ${fmt(step.consumptionMW)} MW, batterie ${fmt(step.batteryEndMWh)} MWh${step.unservedMW > eps ? ', demande non couverte' : ''}${draft?.some(edit => edit.index === i) ? ', heure modifiée' : ''}${editing ? '. Flèches haut et bas pour modifier' : ''}`} title={step.hour}><span>{steps.length <= 8 || i % 4 === 0 || i === steps.length - 1 ? step.hour.slice(0, 2) : ''}</span></button>)}</div></div>
   </div>
 }
 
@@ -150,7 +155,7 @@ function App() {
     return () => media.removeEventListener('change', change)
   }, [])
   const day = useMemo(() => rows.length ? simulateDay(rows, battery) : null, [rows, battery])
-  const trial = useMemo(() => draft && rows.length ? previewWhatIf(rows, battery, draft.index, draft.changes) : null, [rows, battery, draft])
+  const trial = useMemo(() => draft && rows.length ? previewWhatIfMany(rows, battery, draft.map(edit => ({ index: edit.index, ...edit.changes }))) : null, [rows, battery, draft])
   const displayedDay = trial?.preview ?? day
   const validationKey = JSON.stringify({ rows, battery })
   const activeValidation = validation?.key === validationKey ? validation : null
@@ -190,11 +195,12 @@ function App() {
     setPanel(null)
     setPlaying(false)
     setDraft(current => {
-      if (current && current.index !== index) return current
-      const changes = { ...current?.changes, [curve]: value }
+      const changes = { ...current?.find(edit => edit.index === index)?.changes, [curve]: value }
       if (changes.productionMW === rows[index].productionMW) delete changes.productionMW
       if (changes.consumptionMW === rows[index].consumptionMW) delete changes.consumptionMW
-      return Object.keys(changes).length ? { index, changes } : null
+      const others = current?.filter(edit => edit.index !== index) ?? []
+      const next = Object.keys(changes).length ? [...others, { index, changes }] : others
+      return next.length ? next : null
     })
   }
   const reset = () => { setRows(originalRows.map(row => ({ ...row }))); setBattery(initialBattery); setPlaying(false) }
@@ -218,7 +224,7 @@ function App() {
         <button className={`outcome ${outcome.danger ? 'danger' : ''}`} onClick={() => setMore(!more)} aria-expanded={more} aria-label={`${outcome.title} : ${outcome.detail}`}><span className="outcome-dot"/><span><strong>{outcome.title} <em>Pourquoi ?</em></strong>{more && <small>Déficit {fmt(Math.max(0, step.consumptionMW - step.productionMW))} MW · réserve {fmt(step.batteryStartMWh)} MWh · décharge max. {fmt(battery.maxDischargeMW)} MW<br/>{outcome.detail}</small>}</span><ChevronDown size={14} className={more ? 'rotate' : ''}/></button>
         <div className={`whatif ${editing ? 'active' : ''}`}>
           {!editing ? <button className="whatif-start" disabled={loading} onClick={() => { setEditing(true); setPanel(null); setPlaying(false) }}>✳ &nbsp;Et si ? <span>Modifier une courbe</span></button> : <>
-            <div className="whatif-controls"><span className="whatif-title" title={draft ? 'Une heure modifiée à la fois' : undefined}>{draft ? `1 H · ${rows[draft.index].hour.slice(0, 2)}H` : 'ET SI ?'}</span><div className="curve-switch" aria-label="Courbe à modifier"><button aria-pressed={curve === 'productionMW'} onClick={() => setCurve('productionMW')}>Production</button><button aria-pressed={curve === 'consumptionMW'} onClick={() => setCurve('consumptionMW')}>Conso.</button></div><span className="whatif-hint">{draft ? `Une heure à la fois · ${rows[draft.index].hour}` : 'Glisser un point · ↑↓ au clavier'}</span><div className="whatif-actions">{draft ? <><button onClick={() => setDraft(null)}>Annuler</button><button className="apply" onClick={() => { if (trial) setRows(trial.rows); setDraft(null); setEditing(false); setPlaying(false) }}>Appliquer</button></> : <button onClick={() => setEditing(false)} aria-label="Fermer le mode Et si">Fermer</button>}</div></div>
+            <div className="whatif-controls"><span className="whatif-title" title={draft ? `${draft.length} heure${draft.length > 1 ? 's' : ''} modifiée${draft.length > 1 ? 's' : ''}` : undefined}>{draft ? `${draft.length} H` : 'ET SI ?'}</span><div className="curve-switch" aria-label="Courbe à modifier"><button aria-pressed={curve === 'productionMW'} onClick={() => setCurve('productionMW')}>Production</button><button aria-pressed={curve === 'consumptionMW'} onClick={() => setCurve('consumptionMW')}>Conso.</button></div><span className="whatif-hint">{draft ? 'Modifier d’autres points · ↑↓ au clavier' : 'Glisser un point · ↑↓ au clavier'}</span><div className="whatif-actions">{draft ? <><button onClick={() => setDraft(null)}>Annuler</button><button className="apply" onClick={() => { if (trial) setRows(trial.rows); setDraft(null); setEditing(false); setPlaying(false) }}>Appliquer</button></> : <button onClick={() => setEditing(false)} aria-label="Fermer le mode Et si">Fermer</button>}</div></div>
             {trial && <div className="trial-summary" role="status"><span><i/> Réf. <i/> Essai</span><span>Manque : <strong>{fmt(trial.baseline.summary.totalUnservedMWh)} → {fmt(trial.preview.summary.totalUnservedMWh)} MWh</strong></span><span title="Début de la première pénurie">Alerte : <strong>{shortageLabel(trial.comparison.firstShortageBaseline)} → {shortageLabel(trial.comparison.firstShortagePreview)}</strong></span></div>}
           </>}
         </div>

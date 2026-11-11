@@ -109,7 +109,7 @@ export default function IslandScene(values: IslandSceneProps) {
     let usingGeneratedIsland = false
     let generatedGroundY = .19
     let destroyed = false
-    type GeneratedFlow = { path: THREE.CatmullRomCurve3; tube: THREE.Mesh; markers: THREE.Mesh[]; kind: 'production' | 'load' | 'battery' }
+    type GeneratedFlow = { path: THREE.CatmullRomCurve3; tube: THREE.Mesh; markers: THREE.Mesh[]; kind: 'production' | 'load' | 'battery'; phase: number }
     const generatedFlows: GeneratedFlow[] = []
     const generatedFlowMaterial = new THREE.MeshBasicMaterial({ color: 0x9bf5d2, transparent: true, opacity: .83, depthWrite: false })
     // Both the markers and the connections respect the mesh's depth so the
@@ -668,7 +668,7 @@ export default function IslandScene(values: IslandSceneProps) {
           generatedIsland.add(marker)
           return marker
         })
-        generatedFlows.push({ path, tube, markers, kind: spec.kind })
+        generatedFlows.push({ path, tube, markers, kind: spec.kind, phase: 0 })
       }
       system.visible = false
       usingGeneratedIsland = true
@@ -708,7 +708,6 @@ export default function IslandScene(values: IslandSceneProps) {
     const clock = new THREE.Clock()
     const animate = () => {
       const delta = Math.min(clock.getDelta(), 0.05)
-      const elapsed = clock.elapsedTime
       if (!reducedMotion) {
         const speed = Math.min(currentValues.current.productionMW, 100) * 0.006
         rotors.forEach((rotor, index) => { rotor.rotation.z -= delta * speed * (1 + index * 0.05) })
@@ -725,7 +724,8 @@ export default function IslandScene(values: IslandSceneProps) {
       }
       if (focusing) {
         const before = controls.target.clone()
-        controls.target.lerp(desiredTarget, reducedMotion ? 1 : .09)
+        // Keep the camera's easing consistent across display refresh rates.
+        controls.target.lerp(desiredTarget, reducedMotion ? 1 : 1 - Math.exp(-5.66 * delta))
         camera.position.add(controls.target.clone().sub(before))
         if (controls.target.distanceToSquared(desiredTarget) < .0001) focusing = false
       }
@@ -733,8 +733,9 @@ export default function IslandScene(values: IslandSceneProps) {
         const power = marker.pathIndex === 0 ? state.productionMW : marker.pathIndex === 3 ? Math.max(state.chargeMW ?? 0, state.dischargeMW ?? 0) : Math.max(0, state.consumptionMW - (state.unservedMW ?? 0))
         marker.mesh.visible = power > .001
         const direction = marker.pathIndex === 3 && (state.chargeMW ?? 0) > 0 ? -1 : 1
-        const progress = ((marker.phase + (reducedMotion ? 0 : direction * elapsed * .055)) % 1 + 1) % 1
-        marker.path.getPointAt(progress, marker.mesh.position)
+        // Advance from the current position so a change of direction does not teleport particles.
+        if (!reducedMotion && power > .001) marker.phase = ((marker.phase + direction * delta * .055) % 1 + 1) % 1
+        marker.path.getPointAt(marker.phase, marker.mesh.position)
       }
       if (usingGeneratedIsland) {
         generatedFlowMaterial.color.setHex(stressed ? 0xf2ba75 : 0x9bf5d2)
@@ -745,9 +746,10 @@ export default function IslandScene(values: IslandSceneProps) {
             : flow.kind === 'load' ? Math.max(0, state.consumptionMW - (state.unservedMW ?? 0)) : Math.max(state.chargeMW ?? 0, state.dischargeMW ?? 0)
           flow.tube.visible = power > .001
           const reverse = flow.kind === 'battery' && (state.dischargeMW ?? 0) > 0
+          if (!reducedMotion && power > .001) flow.phase = ((flow.phase + (reverse ? -1 : 1) * delta * .055) % 1 + 1) % 1
           flow.markers.forEach((marker, i) => {
             marker.visible = power > .001
-            const progress = ((i / flow.markers.length + (reducedMotion ? 0 : (reverse ? -1 : 1) * elapsed * .055)) % 1 + 1) % 1
+            const progress = (i / flow.markers.length + flow.phase) % 1
             flow.path.getPointAt(progress, marker.position)
           })
         }

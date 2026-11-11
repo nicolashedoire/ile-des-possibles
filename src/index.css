@@ -20,3 +20,8 @@
 @media(max-width:700px){.whatif{left:8px;right:8px;bottom:164px}.whatif-start{padding:7px 10px}.whatif-controls{gap:4px;padding:4px}.whatif-title{font-size:9px;padding:0 2px}.curve-switch button{font-size:10px;padding:0 6px}.whatif-hint{display:none}.whatif-actions button{font-size:10px;padding:0 7px}.trial-summary{gap:8px;justify-content:space-between;padding:6px 7px;font-size:9px}.trial-summary i{width:8px}.trial-summary span{white-space:nowrap}}
 @media(max-height:650px){.whatif{bottom:153px}}
 @media(max-width:380px){.whatif-start span{display:none}.trial-summary{font-size:8px;gap:4px}.trial-summary i{width:6px}.whatif-controls{gap:3px}.curve-switch button{padding:0 5px}.whatif-actions button{padding:0 6px}}
+/* Highlight newly edited samples without interpolating calculated values. */
+.point-edited{stroke:#102016;stroke-width:1.2;vector-effect:non-scaling-stroke;animation:edited-point-in .18s ease-out}
+@keyframes edited-point-in{from{opacity:.35}to{opacity:1}}
+.chart-hits button{transition:background-color .16s ease}
+@media (prefers-reduced-motion:reduce){.point-edited{animation:none}.chart-hits button{transition:none}}

@@ -21,9 +21,11 @@ Une journée fictive de 24 heures se charge automatiquement à l'ouverture : auc
 
 ### Pourquoi ? Et si ?
 
-Ouvrez **Pourquoi ?** pour comprendre le bilan de l'heure sélectionnée. Avec **Et si ?**, choisissez la production ou la consommation et faites glisser un point du graphique ; les flèches haut et bas permettent aussi de le modifier au clavier. L'essai porte sur une heure à la fois, avec la possibilité de modifier les deux courbes à cette heure.
+Ouvrez **Pourquoi ?** pour comprendre le bilan de l'heure sélectionnée. Avec **Et si ?**, choisissez la production ou la consommation et faites glisser les points du graphique ; les flèches haut et bas permettent aussi de les modifier au clavier. Plusieurs heures et les deux courbes peuvent être modifiées dans un même essai ; les points modifiés restent visibles.
 
 La journée entière est recalculée : les courbes en pointillés montrent la référence, et le résumé compare l'énergie non servie et le début de la première pénurie. Parcourez les autres heures pour observer les conséquences sur la batterie et le reste de la journée, puis choisissez **Appliquer** ou **Annuler**. La référence reste intacte pendant l'essai.
+
+Les courbes de puissance sont tracées en marches : le modèle suppose chaque valeur constante pendant son heure. La courbe de batterie indique la réserve en fin d'heure. Les flux sur l'île sont une animation schématique du bilan ; les pales du modèle Meshy restent fixes.
 
 Les données d'exemple sont **fictives**. Elles sont déficitaires à toutes les heures : la réserve s'épuise progressivement. Pour explorer aussi la recharge, choisissez une heure et augmentez la production au-dessus de la consommation ; la batterie absorbera alors le surplus dans les limites de sa capacité et de sa puissance de charge.
 
