@@ -9,6 +9,11 @@ type IslandSceneProps = {
   consumptionMW: number
   batteryMWh: number
   deficitMW: number
+  chargeMW?: number
+  dischargeMW?: number
+  unservedMW?: number
+  selected?: 'production' | 'consommation' | 'batterie'
+  onSelect?: (id: 'production' | 'consommation' | 'batterie') => void
 }
 
 type SceneValues = IslandSceneProps
@@ -18,9 +23,12 @@ export default function IslandScene(values: IslandSceneProps) {
   const host = useRef<HTMLDivElement>(null)
   const currentValues = useRef<SceneValues>(values)
   const refreshAnnotations = useRef<(() => void) | null>(null)
+  const focusInstallation = useRef<((id: 'production' | 'consommation' | 'batterie') => void) | null>(null)
   const [webglUnavailable, setWebglUnavailable] = useState(false)
+  const formatAccessible = (value: number) => new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 }).format(value)
   currentValues.current = values
   useEffect(() => { refreshAnnotations.current?.() }, [values.productionMW, values.consumptionMW, values.batteryMWh])
+  useEffect(() => { if (values.selected) focusInstallation.current?.(values.selected) }, [values.selected])
 
   useEffect(() => {
     const element = host.current
@@ -37,7 +45,7 @@ export default function IslandScene(values: IslandSceneProps) {
     renderer.setClearColor(0x090909, 1)
     renderer.outputColorSpace = THREE.SRGBColorSpace
     renderer.toneMapping = THREE.ACESFilmicToneMapping
-    renderer.toneMappingExposure = 1.25
+    renderer.toneMappingExposure = 1.05
     renderer.shadowMap.enabled = true
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
     renderer.domElement.style.display = 'block'
@@ -48,7 +56,7 @@ export default function IslandScene(values: IslandSceneProps) {
 
     const scene = new THREE.Scene()
     const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100)
-    camera.position.set(11.5, 10.8, 15)
+    camera.position.set(11.5, 7.4, 18)
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.target.set(0, 0.5, 0)
     controls.enablePan = false
@@ -59,8 +67,8 @@ export default function IslandScene(values: IslandSceneProps) {
     controls.maxPolarAngle = Math.PI * 0.46
     controls.update()
 
-    scene.add(new THREE.HemisphereLight(0xe9efff, 0x343a36, 2.5))
-    const key = new THREE.DirectionalLight(0xffffff, 3.5)
+    scene.add(new THREE.HemisphereLight(0xfff4e5, 0x1b211a, 2.0))
+    const key = new THREE.DirectionalLight(0xffe2bd, 3.2)
     key.position.set(-5, 12, 8)
     key.castShadow = true
     key.shadow.mapSize.set(1024, 1024)
@@ -72,45 +80,106 @@ export default function IslandScene(values: IslandSceneProps) {
     key.shadow.camera.far = 35
     key.shadow.bias = -0.0003
     scene.add(key)
-    const rim = new THREE.DirectionalLight(0x8da4c8, 1.2)
+    const rim = new THREE.DirectionalLight(0xb5d7bf, 0.8)
     rim.position.set(6, 5, -8)
     scene.add(rim)
 
     const mat = (color: THREE.ColorRepresentation, roughness = 0.8, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness })
-    const concrete = mat(0x888d8c)
-    const concreteLight = mat(0xcbd0cf)
-    const concreteDark = mat(0x424846)
-    const blackMetal = mat(0x222b2b, 0.5, 0.6)
-    const glass = mat(0x344444, 0.22, 0.58)
-    const roofMaterial = mat(0x525a59, 0.74, 0.15)
-    const surfaceMaterial = mat(0x626d66)
-    const roadMaterial = mat(0x383e3c)
-    const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xe7f4ef })
-    const edgeMaterial = new THREE.LineBasicMaterial({ color: 0xa7c4b3, transparent: true, opacity: 0.15 })
+    const concrete = mat(0x8f8c80)
+    const concreteLight = mat(0xe6e4d9)
+    const concreteDark = mat(0x4a4940)
+    const blackMetal = mat(0x242a29, 0.5, 0.6)
+    const glass = new THREE.MeshStandardMaterial({ color: 0x89704c, emissive: 0xe0a950, emissiveIntensity: 0.55, roughness: 0.32, metalness: 0.15 })
+    const roofMaterial = mat(0x3a403d, 0.74, 0.15)
+    const roadMaterial = mat(0x3b3b33)
+    const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xa3f5d3 })
     const system = new THREE.Group()
     scene.add(system)
 
-    // A beveled geological base gives the installation scale and depth.
-    const shape = new THREE.Shape()
-    shape.moveTo(-4.6, -1.8)
-    shape.bezierCurveTo(-4.6, -2.8, -3.4, -3.3, -2.2, -3.4)
-    shape.lineTo(1.5, -3.35)
-    shape.bezierCurveTo(3.4, -3.2, 4.8, -2.2, 4.7, -0.8)
-    shape.lineTo(4.2, 1.9)
-    shape.bezierCurveTo(3.8, 3.25, 2.7, 3.6, 1.0, 3.5)
-    shape.lineTo(-2.9, 3.0)
-    shape.bezierCurveTo(-4.2, 2.7, -4.8, 1.7, -4.75, 0.4)
-    shape.closePath()
-    const islandGeometry = new THREE.ExtrudeGeometry(shape, { depth: 0.66, steps: 1, bevelEnabled: true, bevelThickness: 0.16, bevelSize: 0.16, bevelSegments: 3, curveSegments: 18 })
-    islandGeometry.rotateX(-Math.PI / 2)
-    const island = new THREE.Mesh(islandGeometry, [surfaceMaterial, concreteDark])
-    island.position.y = -0.68
-    island.receiveShadow = true
-    island.castShadow = true
-    system.add(island)
-    const edge = new THREE.LineSegments(new THREE.EdgesGeometry(islandGeometry, 32), edgeMaterial)
-    edge.position.y = -0.68
-    system.add(edge)
+    // A layered, asymmetrical rock shelf and an irregular grass cap. Every
+    // vertex is deterministic so camera rotations preserve the same island.
+    const sides = 96
+    const radius = (angle: number) => 1 + 0.08 * Math.sin(3 * angle + .4) + .045 * Math.cos(7 * angle - .7) + .027 * Math.sin(11 * angle)
+    const shelfPositions: number[] = [], shelfColors: number[] = [], shelfIndices: number[] = []
+    const levels = 7
+    for (let level = 0; level < levels; level++) {
+      const fraction = level / (levels - 1)
+      for (let i = 0; i < sides; i++) {
+        const a = i * Math.PI * 2 / sides
+        const crag = .03 * Math.sin(i * 2.41 + level * 1.91) + .025 * Math.cos(i * .73 - level * 2)
+        const r = radius(a) * (1 - .24 * fraction + crag)
+        shelfPositions.push(Math.cos(a) * 5.5 * r, .11 - fraction * (1.28 + .2 * Math.sin(2 * a)), Math.sin(a) * 3.15 * r)
+        const shade = Math.max(.2, .47 - fraction * .18 + .045 * Math.sin(i * 1.23 + level * 2.3))
+        shelfColors.push(shade * 1.03, shade, shade * .88)
+      }
+    }
+    for (let j = 0; j < levels - 1; j++) for (let i = 0; i < sides; i++) {
+      const a = j * sides + i, b = j * sides + (i + 1) % sides, c = (j + 1) * sides + i, d = (j + 1) * sides + (i + 1) % sides
+      shelfIndices.push(a, c, b, b, c, d)
+    }
+    const shelfGeometry = new THREE.BufferGeometry()
+    shelfGeometry.setAttribute('position', new THREE.Float32BufferAttribute(shelfPositions, 3))
+    shelfGeometry.setAttribute('color', new THREE.Float32BufferAttribute(shelfColors, 3))
+    shelfGeometry.setIndex(shelfIndices)
+    shelfGeometry.computeVertexNormals()
+    const shelf = new THREE.Mesh(shelfGeometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .98, side: THREE.DoubleSide }))
+    shelf.castShadow = true; shelf.receiveShadow = true; system.add(shelf)
+
+    const groundPositions: number[] = [], groundColors: number[] = [], groundUVs: number[] = [], groundIndices: number[] = []
+    const rings = 24
+    for (let j = 0; j <= rings; j++) for (let i = 0; i < sides; i++) {
+      const a = i * Math.PI * 2 / sides, rr = j / rings * radius(a)
+      const x = Math.cos(a) * 5.5 * rr, z = Math.sin(a) * 3.15 * rr
+      const relief = .025 * Math.sin(x * 3.2 + z * 1.7) * Math.cos(z * 3.5) + .035 * Math.sin(x * 1.8 - z * 2.7)
+      groundPositions.push(x, .12 + relief, z)
+      groundUVs.push(x * .38, z * .38)
+      const shade = .82 + .12 * Math.sin(x * 4 + z * 3) * Math.cos(z * 5 - x * 2)
+      groundColors.push(.30 * shade, .38 * shade, .20 * shade)
+    }
+    for (let j = 0; j < rings; j++) for (let i = 0; i < sides; i++) {
+      const a = j * sides + i, b = j * sides + (i + 1) % sides, c = (j + 1) * sides + i, d = (j + 1) * sides + (i + 1) % sides
+      groundIndices.push(a, b, c, b, d, c)
+    }
+    const groundGeometry = new THREE.BufferGeometry()
+    groundGeometry.setAttribute('position', new THREE.Float32BufferAttribute(groundPositions, 3))
+    groundGeometry.setAttribute('color', new THREE.Float32BufferAttribute(groundColors, 3))
+    groundGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(groundUVs, 2))
+    groundGeometry.setIndex(groundIndices)
+    groundGeometry.computeVertexNormals()
+    // Fine grain reads as meadow in close-up; the generated tile is entirely
+    // local and does not depend on external assets or network requests.
+    const textureCanvas = document.createElement('canvas'); textureCanvas.width = 256; textureCanvas.height = 256
+    const textureContext = textureCanvas.getContext('2d')
+    let meadowTexture: THREE.CanvasTexture | null = null
+    if (textureContext) {
+      const pixels = textureContext.createImageData(256, 256)
+      let randomState = 821
+      for (let i = 0; i < pixels.data.length; i += 4) {
+        randomState = (randomState * 1664525 + 1013904223) >>> 0
+        const tone = 195 + (randomState >>> 27)
+        pixels.data[i] = tone; pixels.data[i + 1] = tone; pixels.data[i + 2] = tone - 8; pixels.data[i + 3] = 255
+      }
+      textureContext.putImageData(pixels, 0, 0)
+      meadowTexture = new THREE.CanvasTexture(textureCanvas)
+      meadowTexture.wrapS = meadowTexture.wrapT = THREE.RepeatWrapping
+      meadowTexture.colorSpace = THREE.SRGBColorSpace
+    }
+    const ground = new THREE.Mesh(groundGeometry, new THREE.MeshStandardMaterial({ vertexColors: true, map: meadowTexture, roughness: 1, side: THREE.DoubleSide }))
+    ground.receiveShadow = true; system.add(ground)
+
+    // Layered fractured outcrops and boulders visually tie the shelf to the
+    // reference image without requiring large external texture downloads.
+    const rockMaterials = [mat(0x69685d), mat(0x55574d), mat(0x77766a)]
+    for (let i = 0; i < 34; i++) {
+      const a = i * 2.399, rr = 2.0 + .5 * Math.sin(i * 6.7), x = Math.cos(a) * rr * 1.35, z = Math.sin(a) * rr * .78
+      if (x > -.8 && z > -.5) continue
+      const s = .13 + .11 * (.5 + .5 * Math.sin(i * 13.5))
+      const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), rockMaterials[i % rockMaterials.length])
+      rock.position.set(x, .15 + s * .24, z); rock.scale.set(1.4, .55, 1.05); rock.rotation.set(i * .7, i * 1.2, i * .4)
+      rock.castShadow = true; rock.receiveShadow = true; system.add(rock)
+    }
+    const hill = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 2), rockMaterials[0])
+    hill.scale.set(1.7, .6, .75); hill.position.set(-.1, .03, -2.35); hill.rotation.y = .3; hill.receiveShadow = true; system.add(hill)
 
     const addBox = (parent: THREE.Object3D, x: number, y: number, z: number, w: number, h: number, d: number, material: THREE.Material, cast = true) => {
       const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material)
@@ -129,14 +198,7 @@ export default function IslandScene(values: IslandSceneProps) {
       return mesh
     }
 
-    // A discrete technical grid, with the island remaining the focal point.
-    const grid = new THREE.GridHelper(22, 44, 0x202b28, 0x161a19)
-    grid.position.y = -1.35
-    grid.material.transparent = true
-    grid.material.opacity = 0.32
-    scene.add(grid)
-
-    // Road routes: wide dark lines with subtle center markings.
+    // Roads and energy paths rest on the terrain, not on a backdrop grid.
     const makePath = (points: THREE.Vector3[], radius: number, material: THREE.Material) => {
       const curve = new THREE.CatmullRomCurve3(points)
       const mesh = new THREE.Mesh(new THREE.TubeGeometry(curve, 56, radius, 6, false), material)
@@ -154,6 +216,7 @@ export default function IslandScene(values: IslandSceneProps) {
       const group = new THREE.Group()
       group.position.set(x, 0.15, z)
       group.scale.setScalar(scale)
+      group.userData.installation = 'production'
       system.add(group)
       turbineGroups.push(group)
       addCylinder(group, 0, 0, 0, 0.24, 0.3, 0.12, concrete, 32)
@@ -182,52 +245,85 @@ export default function IslandScene(values: IslandSceneProps) {
       }
       rotors.push(rotor)
     }
-    addTurbine(-3.1, -1.7, 0.83)
-    addTurbine(-1.4, -2.2, 0.68)
-    addTurbine(-3.3, 0.1, 0.56)
+    addTurbine(-3.35, -1.25, .82)
 
     const battery = new THREE.Group()
     battery.position.set(0.3, 0.16, -1.55)
+    battery.userData.installation = 'batterie'
     system.add(battery)
-    addBox(battery, 0, 0, 0, 1.75, 0.12, 1.18, concreteDark)
-    addBox(battery, 0, 0.12, 0, 1.52, 0.78, 0.95, concreteLight)
-    addBox(battery, 0, 0.9, 0, 1.62, 0.08, 1.05, blackMetal)
-    for (let x = -0.51; x <= 0.51; x += 0.34) {
-      addBox(battery, x, 0.2, 0.483, 0.25, 0.58, 0.02, concreteDark, false)
-      addBox(battery, x, 0.37, 0.5, 0.12, 0.018, 0.012, lineMaterial, false)
-      addBox(battery, x, 0.29, 0.5, 0.12, 0.018, 0.012, lineMaterial, false)
+    // Pavilion with a recessed bank of individually visible battery modules.
+    addBox(battery, 0, 0, 0, 2.0, 0.10, 1.25, concrete)
+    addBox(battery, 0, 0.10, -.51, 1.8, .90, .15, concreteLight)
+    addBox(battery, -.86, .10, 0, .16, .90, 1.10, concreteLight)
+    addBox(battery, .86, .10, 0, .16, .90, 1.10, concreteLight)
+    addBox(battery, 0, 1.0, 0, 2.02, .12, 1.25, concreteLight)
+    addBox(battery, 0, .94, .48, 1.85, .06, .08, mat(0xa3875e))
+    const batteryMetal = mat(0x303e3a, .42, .58)
+    for (let i = 0; i < 4; i++) {
+      const x = -.57 + i * .38
+      addBox(battery, x, .12, .04, .30, .65, .66, batteryMetal)
+      addBox(battery, x, .49, .38, .20, .022, .015, lineMaterial, false)
+      addBox(battery, x, .34, .38, .20, .012, .015, concrete, false)
     }
-    addBox(battery, -0.45, 0.99, 0, 0.35, 0.08, 0.38, concreteDark)
-    addBox(battery, 0.13, 0.99, 0, 0.35, 0.08, 0.38, concreteDark)
 
     const houseGroups: THREE.Group[] = []
+    const solarMaterial = mat(0x283c47, .3, .42)
     const addHouse = (x: number, z: number, scale: number, rotation = 0) => {
       const house = new THREE.Group()
       house.position.set(x, 0.16, z)
       house.rotation.y = rotation
       house.scale.setScalar(scale)
+      house.userData.installation = 'consommation'
       system.add(house)
       houseGroups.push(house)
-      addBox(house, 0, 0, 0, 0.8, 0.55, 0.65, concreteLight)
-      const roof = new THREE.Mesh(new THREE.ConeGeometry(0.67, 0.38, 4, 1), roofMaterial)
-      roof.rotation.y = Math.PI / 4
-      roof.scale.z = 0.86
-      roof.position.y = 0.73
+      addBox(house, 0, 0, 0, 1, .64, .78, concreteLight)
+      const roofShape = new THREE.Shape()
+      roofShape.moveTo(-.56, .62); roofShape.lineTo(0, 1.02); roofShape.lineTo(.56, .62); roofShape.closePath()
+      const roofGeometry = new THREE.ExtrudeGeometry(roofShape, { depth: .88, bevelEnabled: false })
+      const roof = new THREE.Mesh(roofGeometry, roofMaterial)
+      roof.position.z = -.44
       roof.castShadow = true
       house.add(roof)
-      addBox(house, -0.19, 0.17, 0.33, 0.16, 0.18, 0.015, glass, false)
-      addBox(house, 0.18, 0.17, 0.33, 0.16, 0.18, 0.015, glass, false)
-      addBox(house, 0, 0.03, 0.332, 0.12, 0.28, 0.016, blackMetal, false)
+      const slope = Math.atan2(.4, .56)
+      for (const side of [-1, 1]) {
+        const panelGeometry = new THREE.PlaneGeometry(.54, .72)
+        panelGeometry.rotateX(-Math.PI / 2); panelGeometry.rotateZ(-side * slope)
+        const panel = new THREE.Mesh(panelGeometry, solarMaterial)
+        panel.position.set(side * .28, .835, 0); house.add(panel)
+        for (let i = -1; i <= 1; i++) {
+          const line = new THREE.Mesh(new THREE.BoxGeometry(.008, .006, .72), concrete)
+          line.position.set(side * .28 + i * .13, .844 - side * i * .09, 0); house.add(line)
+        }
+      }
+      addBox(house, -.26, .19, .397, .28, .26, .016, blackMetal, false)
+      addBox(house, -.26, .21, .407, .23, .22, .012, glass, false)
+      addBox(house, .24, .08, .397, .36, .48, .016, blackMetal, false)
+      addBox(house, .24, .1, .407, .31, .43, .012, glass, false)
+      addBox(house, 0, .04, .397, .10, .42, .016, roofMaterial, false)
     }
-    addHouse(2.2, -1.6, 0.8, -0.2)
-    addHouse(3.3, -0.95, 0.72, -0.12)
-    addHouse(2.4, 0.75, 0.85, 0.1)
-    addHouse(3.45, 1.0, 0.7, 0.1)
-    addHouse(1.35, 1.9, 0.68, 0.15)
+    addHouse(2.15, -1.55, .86, -.2)
+    addHouse(3.3, -.6, .76, -.12)
+    addHouse(2.2, .65, .94, .1)
+    addHouse(3.35, 1.1, .72, .1)
+    addHouse(1.15, 1.85, .70, .15)
+
+    // Small broadleaf trees soften the miniature and echo the source artwork.
+    const trunk = mat(0x605344), foliage = [mat(0x3b5235), mat(0x4d6240), mat(0x677849)]
+    const addTree = (x: number, z: number, scale: number, seed: number) => {
+      const tree = new THREE.Group(); tree.position.set(x, .16, z); tree.scale.setScalar(scale); system.add(tree)
+      addCylinder(tree, 0, 0, 0, .035, .06, .55, trunk, 8)
+      for (let i = 0; i < 7; i++) {
+        const a = i * 2.399 + seed, r = i ? .16 + .04 * (i % 3) : 0
+        const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(.19 + .035 * (i % 3), 1), foliage[(i + Math.floor(seed)) % foliage.length])
+        crown.position.set(Math.cos(a) * r, .53 + .08 * (i % 3), Math.sin(a) * r); crown.scale.set(1.05, .8, .85); crown.castShadow = true; tree.add(crown)
+      }
+    }
+    ;[[-2.3, .75, .68], [-1.8, 2.05, .8], [-.2, 2.55, .65], [.9, -.85, .72], [1.15, -.05, .5], [3.9, -.05, .7], [3.8, 1.9, .52], [1.5, 2.55, .58], [-3.75, 1.2, .60]].forEach(([x, z, s], i) => addTree(x, z, s, i))
 
     // Industrial load, kept distinct from the residential buildings.
     const factory = new THREE.Group()
     factory.position.set(-0.85, 0.16, 1.55)
+    factory.userData.installation = 'consommation'
     system.add(factory)
     addBox(factory, 0, 0, 0, 1.55, 0.6, 1.04, concrete)
     addBox(factory, 0, 0.6, 0, 1.62, 0.08, 1.12, blackMetal)
@@ -236,23 +332,73 @@ export default function IslandScene(values: IslandSceneProps) {
     addCylinder(factory, 0.48, 0.66, -0.25, 0.09, 0.1, 0.62, blackMetal)
     addBox(factory, -0.25, 0.7, -0.06, 0.36, 0.16, 0.3, concreteDark)
 
-    const linkMaterial = new THREE.MeshBasicMaterial({ color: 0x8fb4a2, transparent: true, opacity: 0.78 })
-    const paths = [
+    const linkMaterial = new THREE.MeshBasicMaterial({ color: 0x90f6cc, transparent: true, opacity: 0.95 })
+    const pathPoints = [
       [new THREE.Vector3(-2.8, 0.23, -1.5), new THREE.Vector3(-1.7, 0.24, -1.05), new THREE.Vector3(-0.9, 0.24, -0.55), new THREE.Vector3(0.3, 0.24, -0.42)],
-      [new THREE.Vector3(0.3, 0.24, -1.0), new THREE.Vector3(0.3, 0.24, -0.42), new THREE.Vector3(1.25, 0.24, 0.05), new THREE.Vector3(2.4, 0.24, -0.6)],
+      [new THREE.Vector3(0.3, 0.24, -0.42), new THREE.Vector3(1.25, 0.24, 0.05), new THREE.Vector3(2.4, 0.24, -0.6)],
       [new THREE.Vector3(0.3, 0.24, -0.42), new THREE.Vector3(-0.3, 0.24, 0.2), new THREE.Vector3(-0.85, 0.24, 1.0)],
-    ].map(points => makePath(points, 0.018, linkMaterial))
-    const movingMarkers: { mesh: THREE.Mesh; path: THREE.CatmullRomCurve3; phase: number }[] = []
+      [new THREE.Vector3(0.3, 0.24, -1.0), new THREE.Vector3(0.3, 0.24, -0.7), new THREE.Vector3(0.3, 0.24, -0.42)],
+    ]
+    const glowMaterial = new THREE.MeshBasicMaterial({ color: 0x79edbd, transparent: true, opacity: .18, depthWrite: false })
+    const paths = pathPoints.map(points => { makePath(points, .045, glowMaterial); return makePath(points, .018, linkMaterial) })
+    const movingMarkers: { mesh: THREE.Mesh; path: THREE.CatmullRomCurve3; phase: number; pathIndex: number }[] = []
     paths.forEach((path, pathIndex) => {
       for (let index = 0; index < 3; index++) {
         const marker = new THREE.Mesh(new THREE.SphereGeometry(0.045, 10, 8), lineMaterial)
         system.add(marker)
-        movingMarkers.push({ mesh: marker, path, phase: index / 3 + pathIndex * 0.17 })
+        movingMarkers.push({ mesh: marker, path, phase: index / 3 + pathIndex * 0.17, pathIndex })
       }
     })
     const centralNode = new THREE.Mesh(new THREE.SphereGeometry(0.085, 16, 12), lineMaterial)
     centralNode.position.set(0.3, 0.24, -0.42)
     system.add(centralNode)
+
+    // Clicking a physical installation opens the equivalent HTML control.
+    // The callback never changes the energy model by itself.
+    const raycaster = new THREE.Raycaster()
+    const pointer = new THREE.Vector2()
+    const selectable = [...turbineGroups, battery, factory, ...houseGroups]
+    let pointerStart: { x: number; y: number } | null = null
+    const onPointerDown = (event: PointerEvent) => { pointerStart = { x: event.clientX, y: event.clientY } }
+    const pickInstallation = (event: PointerEvent): 'production' | 'consommation' | 'batterie' | undefined => {
+      const rect = renderer.domElement.getBoundingClientRect()
+      if (!rect.width || !rect.height) return undefined
+      pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1)
+      raycaster.setFromCamera(pointer, camera)
+      const hit = raycaster.intersectObjects(selectable, true)[0]
+      let target: THREE.Object3D | null | undefined = hit?.object
+      while (target && !target.userData.installation) target = target.parent
+      const id = target?.userData.installation
+      return id === 'production' || id === 'consommation' || id === 'batterie' ? id : undefined
+    }
+    const onPointerUp = (event: PointerEvent) => {
+      if (!pointerStart || Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) > 6) { pointerStart = null; return }
+      pointerStart = null
+      const id = pickInstallation(event)
+      if (id) currentValues.current.onSelect?.(id)
+    }
+    const onPointerMove = (event: PointerEvent) => {
+      renderer.domElement.style.cursor = pointerStart ? 'grabbing' : pickInstallation(event) ? 'pointer' : 'grab'
+    }
+    const onPointerCancel = () => { pointerStart = null; renderer.domElement.style.cursor = 'grab' }
+    renderer.domElement.addEventListener('pointerdown', onPointerDown)
+    renderer.domElement.addEventListener('pointerup', onPointerUp)
+    renderer.domElement.addEventListener('pointermove', onPointerMove)
+    renderer.domElement.addEventListener('pointercancel', onPointerCancel)
+
+    const focusPosition: Record<'production' | 'consommation' | 'batterie', THREE.Vector3> = {
+      production: new THREE.Vector3(-3.35, .85, -1.25),
+      consommation: new THREE.Vector3(1.8, .55, .45),
+      batterie: new THREE.Vector3(.3, .55, -1.55),
+    }
+    const desiredTarget = new THREE.Vector3()
+    let focusing = false
+    focusInstallation.current = (id) => { desiredTarget.copy(focusPosition[id]); focusing = true }
+    const selectionMaterial = new THREE.MeshBasicMaterial({ color: 0xa7ffdc, transparent: true, opacity: .85, side: THREE.DoubleSide })
+    const selectionRing = new THREE.Mesh(new THREE.RingGeometry(.66, .69, 64), selectionMaterial)
+    selectionRing.rotation.x = -Math.PI / 2
+    selectionRing.visible = false
+    system.add(selectionRing)
 
     // Annotate actual installations using their projected 3D bounding boxes. The
     // backing positions are recalculated as the camera moves, without rebuilding
@@ -269,7 +415,7 @@ export default function IslandScene(values: IslandSceneProps) {
       return node
     })
     const siteBoxes = [
-      new THREE.Box3(new THREE.Vector3(-3.7, 0, -2.3), new THREE.Vector3(-2.5, 4.5, -1.1)),
+      new THREE.Box3().setFromObject(turbineGroups[0]),
       new THREE.Box3().setFromObject(battery),
       new THREE.Box3().setFromObject(factory),
     ]
@@ -334,7 +480,7 @@ export default function IslandScene(values: IslandSceneProps) {
     let reducedMotion = mediaQuery.matches
     const onMotionPreference = (event: MediaQueryListEvent) => { reducedMotion = event.matches }
     mediaQuery.addEventListener('change', onMotionPreference)
-    const homeDirection = new THREE.Vector3(11.5, 10.3, 15).normalize()
+    const homeDirection = new THREE.Vector3(11.5, 7.4, 18).normalize()
     let homeDistance = 19
     const resize = () => {
       const width = Math.max(1, element.clientWidth)
@@ -345,7 +491,17 @@ export default function IslandScene(values: IslandSceneProps) {
       // Fit the entire modeled scene, not a fixed distance: the same framing
       // therefore remains usable for narrow, square and wide panels.
       system.updateWorldMatrix(true, true)
-      const bounds = new THREE.Box3().setFromObject(system)
+      const objectCorners: THREE.Vector3[] = []
+      system.traverse(object => {
+        if (!(object instanceof THREE.Mesh) || object === selectionRing) return
+        const geometry = object.geometry
+        if (!geometry.boundingBox) geometry.computeBoundingBox()
+        const box = geometry.boundingBox
+        if (!box) return
+        for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) {
+          objectCorners.push(new THREE.Vector3(x, y, z).applyMatrix4(object.matrixWorld))
+        }
+      })
       const direction = new THREE.Vector3().subVectors(camera.position, controls.target).normalize()
       camera.position.copy(controls.target).addScaledVector(direction, 20)
       camera.lookAt(controls.target)
@@ -353,9 +509,9 @@ export default function IslandScene(values: IslandSceneProps) {
       const inverseRotation = camera.quaternion.clone().invert()
       const vertical = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))
       let distance = 1
-      for (const x of [bounds.min.x, bounds.max.x]) for (const y of [bounds.min.y, bounds.max.y]) for (const z of [bounds.min.z, bounds.max.z]) {
-        const point = new THREE.Vector3(x, y, z).sub(controls.target).applyQuaternion(inverseRotation)
-        distance = Math.max(distance, point.z + Math.abs(point.x) / (vertical * camera.aspect * 0.88), point.z + Math.abs(point.y) / (vertical * 0.88))
+      for (const corner of objectCorners) {
+        const point = corner.sub(controls.target).applyQuaternion(inverseRotation)
+        distance = Math.max(distance, point.z + Math.abs(point.x) / (vertical * camera.aspect * 0.94), point.z + Math.abs(point.y) / (vertical * 0.94))
       }
       homeDistance = distance
       camera.position.copy(controls.target).addScaledVector(direction, distance)
@@ -371,6 +527,8 @@ export default function IslandScene(values: IslandSceneProps) {
       if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home'].includes(event.key)) return
       event.preventDefault()
       if (event.key === 'Home') {
+        focusing = false
+        controls.target.set(0, .5, 0)
         camera.position.copy(controls.target).addScaledVector(homeDirection, homeDistance)
       } else {
         const direction = new THREE.Vector3().subVectors(camera.position, controls.target)
@@ -392,13 +550,31 @@ export default function IslandScene(values: IslandSceneProps) {
       const delta = Math.min(clock.getDelta(), 0.05)
       const elapsed = clock.elapsedTime
       if (!reducedMotion) {
-        const speed = 0.24 + Math.min(currentValues.current.productionMW, 100) * 0.004
+        const speed = Math.min(currentValues.current.productionMW, 100) * 0.006
         rotors.forEach((rotor, index) => { rotor.rotation.z -= delta * speed * (1 + index * 0.05) })
       }
-      const stressed = currentValues.current.deficitMW > 0
-      linkMaterial.color.setHex(stressed ? 0xd4b88c : 0x8fb4a2)
+      const state = currentValues.current
+      const stressed = (state.unservedMW ?? state.deficitMW) > 0
+      linkMaterial.color.setHex(stressed ? 0xf2ba75 : 0x90f6cc)
+      glowMaterial.color.setHex(stressed ? 0xf2ba75 : 0x79edbd)
+      const selected = state.selected
+      selectionRing.visible = Boolean(selected)
+      if (selected) {
+        const pos = focusPosition[selected]
+        selectionRing.position.set(pos.x, .19, pos.z)
+      }
+      if (focusing) {
+        const before = controls.target.clone()
+        controls.target.lerp(desiredTarget, reducedMotion ? 1 : .09)
+        camera.position.add(controls.target.clone().sub(before))
+        if (controls.target.distanceToSquared(desiredTarget) < .0001) focusing = false
+      }
       for (const marker of movingMarkers) {
-        marker.path.getPointAt((marker.phase + (reducedMotion ? 0 : elapsed * 0.055)) % 1, marker.mesh.position)
+        const power = marker.pathIndex === 0 ? state.productionMW : marker.pathIndex === 3 ? Math.max(state.chargeMW ?? 0, state.dischargeMW ?? 0) : Math.max(0, state.consumptionMW - (state.unservedMW ?? 0))
+        marker.mesh.visible = power > .001
+        const direction = marker.pathIndex === 3 && (state.chargeMW ?? 0) > 0 ? -1 : 1
+        const progress = ((marker.phase + (reducedMotion ? 0 : direction * elapsed * .055)) % 1 + 1) % 1
+        marker.path.getPointAt(progress, marker.mesh.position)
       }
       controls.update()
       renderer.render(scene, camera)
@@ -417,6 +593,11 @@ export default function IslandScene(values: IslandSceneProps) {
       element.removeEventListener('keydown', onKeyDown)
       observer.disconnect()
       controls.dispose()
+      renderer.domElement.removeEventListener('pointerdown', onPointerDown)
+      renderer.domElement.removeEventListener('pointerup', onPointerUp)
+      renderer.domElement.removeEventListener('pointermove', onPointerMove)
+      renderer.domElement.removeEventListener('pointercancel', onPointerCancel)
+      focusInstallation.current = null
       const geometries = new Set<THREE.BufferGeometry>()
       const materials = new Set<THREE.Material>()
       scene.traverse(object => {
@@ -428,6 +609,7 @@ export default function IslandScene(values: IslandSceneProps) {
       })
       geometries.forEach(geometry => geometry.dispose())
       materials.forEach(material => material.dispose())
+      meadowTexture?.dispose()
       renderer.dispose()
       renderer.domElement.remove()
     }
@@ -437,7 +619,7 @@ export default function IslandScene(values: IslandSceneProps) {
     ref={host}
     role="img"
     tabIndex={0}
-    aria-label={`Maquette 3D stylisée de l’île : production totale ${values.productionMW} MW, batterie ${values.batteryMWh} MWh, consommation ${values.consumptionMW} MW. Faites glisser pour tourner la vue ; au clavier, utilisez les flèches et la touche début pour réinitialiser.`}
+    aria-label={`Maquette 3D de l’île : production totale ${formatAccessible(values.productionMW)} MW, batterie ${formatAccessible(values.batteryMWh)} MWh, consommation ${formatAccessible(values.consumptionMW)} MW. Cliquez sur une installation pour ouvrir ses réglages. Faites glisser pour tourner la vue ; au clavier, utilisez les flèches et la touche début pour réinitialiser. Les boutons d'installation associés permettent aussi l'accès au clavier.`}
     style={{ position: 'relative', width: '100%', height: '100%', minHeight: 280, overflow: 'hidden', background: '#090909', cursor: webglUnavailable ? 'default' : 'grab', outlineOffset: '-3px' }}
   >{webglUnavailable && <div style={{ color: '#a1a1aa', padding: '2rem', fontSize: '0.875rem', lineHeight: 1.6 }}>La vue 3D n’est pas disponible dans ce navigateur. Les paramètres et les résultats restent accessibles dans les panneaux autour de la carte.</div>}</div>
 }

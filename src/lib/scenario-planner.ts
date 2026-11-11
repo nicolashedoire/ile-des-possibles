@@ -67,10 +67,10 @@ export async function prepareZ3(): Promise<'ready' | 'reload-required'> {
   return 'reload-required'
 }
 
-type Z3Api = Awaited<ReturnType<typeof import('z3-solver')['init']>>
+export type Z3Api = Awaited<ReturnType<typeof import('z3-solver')['init']>>
 let z3ApiPromise: Promise<Z3Api> | undefined
 
-async function loadZ3(): Promise<Z3Api> {
+export async function loadZ3(): Promise<Z3Api> {
   if (!globalThis.crossOriginIsolated) throw new Error('Activez Z3 et rechargez la page avant de vérifier les contraintes.')
   if (!z3ApiPromise) {
     z3ApiPromise = (async () => {
