@@ -5,6 +5,8 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
 import { layoutWithLines, prepareWithSegments } from '@chenglou/pretext'
 import { placeAnnotations, type Rect } from './annotation-layout'
+import { isolateWindRotor } from './wind-rotor'
+import { windRotorSpeed } from './wind-motion'
 
 type IslandSceneProps = {
   productionMW: number
@@ -107,6 +109,7 @@ export default function IslandScene(values: IslandSceneProps) {
     generatedIsland.visible = false
     scene.add(generatedIsland)
     let usingGeneratedIsland = false
+    let generatedRotor: THREE.Group | null = null
     let generatedGroundY = .19
     let destroyed = false
     type GeneratedFlow = { path: THREE.CatmullRomCurve3; tube: THREE.Mesh; markers: THREE.Mesh[]; kind: 'production' | 'load' | 'battery'; phase: number }
@@ -614,6 +617,7 @@ export default function IslandScene(values: IslandSceneProps) {
         if (!(object instanceof THREE.Mesh)) return
         object.castShadow = true
         object.receiveShadow = true
+        if (!generatedRotor) generatedRotor = isolateWindRotor(object)
       })
       generatedIsland.add(model)
       generatedIsland.updateWorldMatrix(true, true)
@@ -707,10 +711,13 @@ export default function IslandScene(values: IslandSceneProps) {
     let frame = 0
     const clock = new THREE.Clock()
     const animate = () => {
-      const delta = Math.min(clock.getDelta(), 0.05)
-      if (!reducedMotion) {
-        const speed = Math.min(currentValues.current.productionMW, 100) * 0.006
-        rotors.forEach((rotor, index) => { rotor.rotation.z -= delta * speed * (1 + index * 0.05) })
+      const frameDelta = clock.getDelta()
+      const delta = Math.min(frameDelta, 0.05)
+      const speed = windRotorSpeed(currentValues.current.productionMW, reducedMotion)
+      const turn = Math.min(frameDelta, .25) * speed
+      if (turn) {
+        rotors.forEach(rotor => { rotor.rotation.z -= turn })
+        if (generatedRotor) generatedRotor.rotation.z -= turn
       }
       const state = currentValues.current
       const stressed = (state.unservedMW ?? state.deficitMW) > 0

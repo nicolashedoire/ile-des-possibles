@@ -25,11 +25,11 @@ Ouvrez **Pourquoi ?** pour comprendre le bilan de l'heure sélectionnée. Avec *
 
 La journée entière est recalculée : les courbes en pointillés montrent la référence, et le résumé compare l'énergie non servie et le début de la première pénurie. Parcourez les autres heures pour observer les conséquences sur la batterie et le reste de la journée, puis choisissez **Appliquer** ou **Annuler**. La référence reste intacte pendant l'essai.
 
-Les courbes de puissance sont tracées en marches : le modèle suppose chaque valeur constante pendant son heure. La courbe de batterie indique la réserve en fin d'heure. Les flux sur l'île sont une animation schématique du bilan ; les pales du modèle Meshy restent fixes.
+Les courbes de puissance sont tracées en marches : le modèle suppose chaque valeur constante pendant son heure. La courbe de batterie indique la réserve en fin d'heure. Les flux sur l'île sont une animation schématique du bilan.
 
 Les données d'exemple sont **fictives**. Elles sont déficitaires à toutes les heures : la réserve s'épuise progressivement. Pour explorer aussi la recharge, choisissez une heure et augmentez la production au-dessus de la consommation ; la batterie absorbera alors le surplus dans les limites de sa capacité et de sa puissance de charge.
 
-La maquette 3D a été générée avec Meshy à partir de l'image de couverture, puis optimisée pour le Web. Les installations peuvent être sélectionnées directement ; les pales sont fixes car le modèle généré est un maillage unique. Les indications de flux restent schématiques : elles ne constituent pas un calcul détaillé de réseau électrique.
+La maquette 3D a été générée avec Meshy à partir de l'image de couverture, puis optimisée pour le Web. Les installations peuvent être sélectionnées directement. Les pales d'origine ont été isolées du maillage pour tourner selon la production affichée, y compris dans les essais ; elles s'arrêtent à zéro et lorsque le mouvement réduit est demandé. Leur vitesse est une représentation illustrative : les données décrivent la production totale de l'île, pas la production éolienne seule. Les indications de flux restent schématiques et ne constituent pas un calcul détaillé de réseau électrique.
 
 ## Règles du modèle
 
