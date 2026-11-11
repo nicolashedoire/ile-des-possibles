@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDownRight, ArrowLeft, ArrowRight, ArrowUpRight, Battery, BatteryCharging, Check, CircleHelp, CloudOff, Factory, Pause, Play, RotateCcw, SlidersHorizontal, Upload, Wind, Zap } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { ArrowDownRight, Battery, BatteryCharging, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, CloudOff, Database, Factory, GitCompareArrows, Pause, Play, RotateCcw, Upload, Wind, X, Zap } from 'lucide-react'
 import IslandScene from '@/components/IslandScene'
 import ScenarioCompare from '@/components/ScenarioCompare'
 import { importEnergyData } from '@/lib/import-energy-data'
 import { simulateDay, type BatteryConfig, type HourInput, type HourResult } from '@/lib/timeline'
 
 type Site = 'production' | 'consommation' | 'batterie'
+type Panel = Site | 'data' | 'compare' | 'help' | null
 const initialBattery: BatteryConfig = { capacityMWh: 120, initialMWh: 100, maxChargeMW: 20, maxDischargeMW: 20, chargeEfficiency: .95, dischargeEfficiency: .95 }
 type SavedDay = { rows: HourInput[]; originalRows: HourInput[]; battery: BatteryConfig; hourIndex: number; fileName: string }
 const savedDayKey = 'ile-day-z3-reload-v1'
+const eps = 1e-7
+const fmt = (value: number, decimals = 1) => new Intl.NumberFormat('fr-FR', { maximumFractionDigits: decimals }).format(Math.abs(value) < 1e-8 ? 0 : value)
+
 function readSavedDay(): SavedDay | null {
   try {
     const raw = sessionStorage.getItem(savedDayKey)
@@ -21,36 +24,34 @@ function readSavedDay(): SavedDay | null {
     return saved
   } catch { return null }
 }
-const fmt = (n: number, max = 1) => new Intl.NumberFormat('fr-FR', { maximumFractionDigits: max }).format(Math.abs(n) < 1e-8 ? 0 : n)
-const epsilon = 1e-7
 
-function explanation(s: HourResult, battery: BatteryConfig): { title: string; description: string } {
-  const deficit = s.consumptionMW - s.productionMW
-  if (s.unservedMW > epsilon) {
-    const when = s.shortageStartsAfterMinutes === null ? '' : s.shortageStartsAfterMinutes <= epsilon ? ' dès le début de cette heure' : ` après environ ${fmt(s.shortageStartsAfterMinutes, 0)} min`
-    const causes: string[] = []
-    if (deficit > battery.maxDischargeMW + epsilon) causes.push(`sa puissance maximale de décharge (${fmt(battery.maxDischargeMW)} MW) est inférieure au déficit`)
-    if (s.batteryEndMWh <= epsilon) causes.push(s.batteryStartMWh <= epsilon ? 'sa réserve est déjà vide au début de l’heure' : 'sa réserve s’épuise pendant cette heure')
-    return { title: `La demande n’est pas entièrement couverte${when}.`, description: `Le déficit est de ${fmt(deficit)} MW ; ${fmt(s.unservedMW)} MWh restent non servis pendant l’heure. ${causes.length ? `Pour la batterie, ${causes.join(' et ')}. ` : ''}Elle fournit ${fmt(s.dischargeMW)} MWh au réseau et sa réserve passe de ${fmt(s.batteryStartMWh)} à ${fmt(s.batteryEndMWh)} MWh.` }
+function consequence(step: HourResult, battery: BatteryConfig) {
+  const deficit = step.consumptionMW - step.productionMW
+  if (step.unservedMW > eps) {
+    const cause = step.batteryStartMWh <= eps ? 'Batterie vide' : deficit > battery.maxDischargeMW + eps ? 'Puissance de batterie insuffisante' : 'Batterie épuisée pendant l’heure'
+    const when = step.shortageStartsAfterMinutes && step.shortageStartsAfterMinutes > eps ? `après ${fmt(step.shortageStartsAfterMinutes, 0)} min` : 'dès le début'
+    return { title: `${fmt(step.unservedMW)} MWh non servis`, detail: `${cause} · ${when}`, danger: true }
   }
-  if (deficit > epsilon) return { title: 'La batterie complète la production.', description: `La demande dépasse la production de ${fmt(deficit)} MW. La batterie livre ${fmt(s.dischargeMW)} MWh sur l’heure ; sa réserve passe de ${fmt(s.batteryStartMWh)} à ${fmt(s.batteryEndMWh)} MWh.` }
-  if (s.chargeMW > epsilon) return { title: 'Le surplus recharge la batterie.', description: `La production dépasse la demande de ${fmt(-deficit)} MW. La batterie absorbe ${fmt(s.chargeMW)} MWh sur l’heure et termine à ${fmt(s.batteryEndMWh)} MWh${s.curtailedMW > epsilon ? ` ; ${fmt(s.curtailedMW)} MWh de surplus ne sont pas stockés` : ''}.` }
-  if (s.curtailedMW > epsilon) return { title: 'Une partie du surplus n’est pas utilisée.', description: `La production dépasse la demande de ${fmt(-deficit)} MW. La batterie ne peut pas absorber davantage : ${fmt(s.curtailedMW)} MWh ne sont pas stockés pendant cette heure.` }
-  return { title: 'La production couvre la demande.', description: `À cette heure, l’île utilise ${fmt(s.consumptionMW)} MWh et la batterie reste à ${fmt(s.batteryEndMWh)} MWh.` }
+  if (step.chargeMW > eps) return { title: `Batterie +${fmt(step.batteryEndMWh - step.batteryStartMWh)} MWh`, detail: step.curtailedMW > eps ? `${fmt(step.curtailedMW)} MWh de surplus non stocké` : 'Le surplus recharge la batterie', danger: false }
+  if (deficit > eps) return { title: `Batterie −${fmt(step.batteryStartMWh - step.batteryEndMWh)} MWh`, detail: 'La batterie complète la production', danger: false }
+  if (step.curtailedMW > eps) return { title: `${fmt(step.curtailedMW)} MWh non stockés`, detail: 'La batterie ne peut pas absorber le surplus', danger: false }
+  return { title: 'Demande couverte', detail: 'Production et demande à l’équilibre', danger: false }
 }
 
 function ValueField({ label, unit, value, onChange, max = 1000 }: { label: string; unit: string; value: number; onChange: (value: number) => void; max?: number }) {
-  return <label className="value-field"><span>{label}</span><span className="value-input"><input type="number" min="0" max={max} step="1" value={value} onChange={event => { const n = Number(event.target.value); if (Number.isFinite(n)) onChange(Math.min(max, Math.max(0, n))) }} /><small>{unit}</small></span></label>
+  return <label className="control-field"><span>{label}</span><span className="input-wrap"><input type="number" min="0" max={max} step="1" value={value} onChange={event => {const n = Number(event.target.value); if (Number.isFinite(n)) onChange(Math.min(max, Math.max(0, n)))}} /><small>{unit}</small></span></label>
 }
 
-function HourChart({ steps, index, capacity, onChange }: { steps: HourResult[]; index: number; capacity: number; onChange: (index: number) => void }) {
-  const maxPower = Math.max(1, ...steps.flatMap(s => [s.productionMW, s.consumptionMW]))
-  const reserveY = (energy: number) => 55 - (capacity > 0 ? Math.min(1, energy / capacity) : 0) * 48
-  const reserveX = (i: number) => steps.length === 1 ? 500 : 10 + 980 * i / (steps.length - 1)
-  const points = steps.map((s, i) => `${reserveX(i)},${reserveY(s.batteryEndMWh)}`).join(' ')
-  return <div className="chart-shell"><div className="chart-head"><div><span className="eyebrow">LES DONNÉES DANS LE TEMPS</span><h3>La journée en un regard</h3></div><div className="chart-legend"><span><i className="legend-prod"/>Production</span><span><i className="legend-demand"/>Consommation</span></div></div>
-    <div className="hour-chart" role="group" aria-label="Choisir une heure de la journée">{steps.map((s, i) => <button key={`${s.hour}-${i}`} type="button" onClick={() => onChange(i)} className={`hour-column ${i === index ? 'is-current' : ''}`} aria-label={`${s.hour} : production ${fmt(s.productionMW)} MW, consommation ${fmt(s.consumptionMW)} MW, batterie en fin d’heure ${fmt(s.batteryEndMWh)} MWh${s.unservedMW > epsilon ? ', énergie non servie' : ''}`} aria-pressed={i === index}><span className="hour-bars"><i className="bar production" style={{ height: `${Math.max(2, s.productionMW / maxPower * 100)}%` }}/><i className="bar demand" style={{ height: `${Math.max(2, s.consumptionMW / maxPower * 100)}%` }}/></span><span className="hour-tick">{steps.length <= 12 || i % 3 === 0 || i === steps.length - 1 ? s.hour.slice(0, 2) : ''}</span></button>)}</div><p className="chart-caption">Une paire de barres = une heure. Sélectionnez une heure pour en observer les conséquences.</p>
-    <div className="reserve-chart"><div><span>Réserve de la batterie</span><strong>{fmt(steps[index].batteryEndMWh)} <small>MWh</small></strong></div><svg viewBox="0 0 1000 60" preserveAspectRatio="none" aria-hidden="true"><line x1="10" y1="55" x2="990" y2="55" stroke="#e2e9e3" strokeWidth="1" vectorEffect="non-scaling-stroke"/><polyline points={points} fill="none" stroke="#589872" strokeWidth="2" vectorEffect="non-scaling-stroke"/><circle cx={reserveX(index)} cy={reserveY(steps[index].batteryEndMWh)} r="4" fill="#2c7750" vectorEffect="non-scaling-stroke"/></svg><div className="reserve-range"><span>0 MWh</span><span>{fmt(capacity)} MWh de capacité</span></div></div></div>
+function IntegratedChart({ steps, index, capacity, playing, speed, onChange, onPlay, onSpeed }: { steps: HourResult[]; index: number; capacity: number; playing: boolean; speed: number; onChange: (i: number) => void; onPlay: () => void; onSpeed: () => void }) {
+  const maxPower = Math.max(1, ...steps.flatMap(step => [step.productionMW, step.consumptionMW]))
+  const x = (i: number) => steps.length === 1 ? 500 : 10 + 980 * i / (steps.length - 1)
+  const powerY = (n: number) => 88 - n / maxPower * 75
+  const chargeY = (n: number) => 88 - (capacity > 0 ? Math.min(1, n / capacity) : 0) * 75
+  const points = (get: (step: HourResult) => number, y: (n: number) => number) => steps.map((step, i) => `${x(i)},${y(get(step))}`).join(' ')
+  return <div className="chart-overlay" aria-label="Graphique horaire interactif">
+    <div className="chart-top"><div className="chart-label"><span className="chart-dot"/> JOURNÉE <span className="chart-current">/ {steps[index].hour}</span></div><div className="legend" aria-label="Légende"><span><i className="legend-production"/><b className="legend-long">Production</b><b className="legend-short">Prod.</b> <small>MW</small></span><span><i className="legend-consumption"/><b className="legend-long">Consommation</b><b className="legend-short">Conso.</b> <small>MW</small></span><span><i className="legend-battery"/><b className="legend-long">Batterie</b><b className="legend-short">Stock</b> <small>MWh</small></span></div><div className="timeline-controls"><button className="control-icon" aria-label="Heure précédente" title="Heure précédente" onClick={() => onChange(index - 1)} disabled={index <= 0}><ChevronLeft size={15}/></button><button className="play-control" aria-label={playing ? 'Mettre en pause' : 'Lire la journée'} title={playing ? 'Pause' : 'Lire la journée'} onClick={onPlay}>{playing ? <Pause size={14} fill="currentColor"/> : <Play size={14} fill="currentColor"/>}</button><button className="control-icon" aria-label="Heure suivante" title="Heure suivante" onClick={() => onChange(index + 1)} disabled={index >= steps.length - 1}><ChevronRight size={15}/></button><button className="speed" aria-label={`Vitesse ${fmt(speed)} fois. Changer la vitesse`} onClick={onSpeed}>{fmt(speed)}×</button></div></div>
+    <div className="chart-plot"><span className="scale-power">0–{fmt(maxPower)} MW</span><span className="scale-battery">0–{fmt(capacity)} MWh</span><svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true"><line x1="10" x2="990" y1="88" y2="88" className="chart-grid"/><line x1="10" x2="990" y1="50" y2="50" className="chart-grid subtle"/><line x1={x(index)} x2={x(index)} y1="8" y2="91" className="chart-marker"/><polyline points={points(s => s.productionMW, powerY)} className="line-production"/><polyline points={points(s => s.consumptionMW, powerY)} className="line-consumption"/><polyline points={points(s => s.batteryEndMWh, chargeY)} className="line-battery"/><circle cx={x(index)} cy={powerY(steps[index].productionMW)} r="4" className="point-production"/><circle cx={x(index)} cy={powerY(steps[index].consumptionMW)} r="4" className="point-consumption"/><circle cx={x(index)} cy={chargeY(steps[index].batteryEndMWh)} r="4" className="point-battery"/></svg><div className="chart-hits" role="group" aria-label="Choisir une heure">{steps.map((step, i) => <button key={step.hour} onClick={() => onChange(i)} aria-pressed={i === index} aria-label={`${step.hour} : production ${fmt(step.productionMW)} MW, consommation ${fmt(step.consumptionMW)} MW, batterie ${fmt(step.batteryEndMWh)} MWh${step.unservedMW > eps ? ', demande non couverte' : ''}`} title={step.hour}><span>{steps.length <= 8 || i % 4 === 0 || i === steps.length - 1 ? step.hour.slice(0, 2) : ''}</span></button>)}</div></div>
+  </div>
 }
 
 function App() {
@@ -58,7 +59,7 @@ function App() {
   const [rows, setRows] = useState<HourInput[]>([])
   const [originalRows, setOriginalRows] = useState<HourInput[]>([])
   const [fileName, setFileName] = useState('Journée sur l’île')
-  const [loadStatus, setLoadStatus] = useState('Chargement de la journée…')
+  const [loadStatus, setLoadStatus] = useState('Chargement…')
   const [loadError, setLoadError] = useState('')
   const [loading, setLoading] = useState(true)
   const loadSequence = useRef(0)
@@ -67,17 +68,19 @@ function App() {
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
   const [selected, setSelected] = useState<Site>('production')
-  const [showModel, setShowModel] = useState(false)
-  const [validation, setValidation] = useState<{key: string; state: 'busy' | 'reload' | 'success' | 'error'; message: string} | null>(null)
+  const [panel, setPanel] = useState<Panel>(null)
+  const [more, setMore] = useState(false)
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 700px)').matches)
+  const [validation, setValidation] = useState<{ key: string; state: 'busy' | 'reload' | 'success' | 'error'; message: string } | null>(null)
 
   const load = async (getFile: () => Promise<File>, name: string) => {
     const seq = ++loadSequence.current
-    setLoading(true); setLoadError(''); setLoadStatus('Lecture de la journée dans votre navigateur…'); setPlaying(false)
+    setLoading(true); setLoadError(''); setLoadStatus('Chargement…'); setPlaying(false)
     try {
       const file = await getFile()
       const parsed = await importEnergyData(file)
       if (seq !== loadSequence.current) return
-      setRows(parsed); setOriginalRows(parsed.map(row => ({ ...row }))); setHourIndex(0); setFileName(name); setLoadStatus(`${parsed.length} heures chargées`)
+      setRows(parsed); setOriginalRows(parsed.map(row => ({ ...row }))); setHourIndex(0); setFileName(name); setLoadStatus(`${parsed.length} heures`)
     } catch (error) {
       if (seq !== loadSequence.current) return
       setLoadError(error instanceof Error ? error.message : 'Impossible de charger les données.'); setLoadStatus('')
@@ -90,42 +93,41 @@ function App() {
   }, 'Journée sur l’île')
   useEffect(() => {
     if (savedDay) {
-      setRows(savedDay.rows); setOriginalRows(savedDay.originalRows); setBattery(savedDay.battery); setHourIndex(savedDay.hourIndex); setFileName(savedDay.fileName); setLoadStatus(`${savedDay.rows.length} heures restaurées`); setLoading(false)
+      setRows(savedDay.rows); setOriginalRows(savedDay.originalRows); setBattery(savedDay.battery); setHourIndex(savedDay.hourIndex); setFileName(savedDay.fileName); setLoadStatus(`${savedDay.rows.length} heures`); setLoading(false)
       try { sessionStorage.removeItem(savedDayKey) } catch { /* session storage may be unavailable */ }
     } else void loadExample()
     return () => { loadSequence.current++ }
   }, [])
-
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 700px)')
+    const change = () => setNarrow(media.matches)
+    media.addEventListener('change', change)
+    return () => media.removeEventListener('change', change)
+  }, [])
   const day = useMemo(() => rows.length ? simulateDay(rows, battery) : null, [rows, battery])
   const validationKey = JSON.stringify({ rows, battery })
   const activeValidation = validation?.key === validationKey ? validation : null
   const verifyDay = async () => {
     if (!day) return
     const key = validationKey
-    setValidation({ key, state: 'busy', message: 'Chargement de Z3 et vérification des bilans horaires…' })
+    setValidation({ key, state: 'busy', message: 'Vérification…' })
     try {
       const { prepareZ3 } = await import('@/lib/scenario-planner')
       if (await prepareZ3() === 'reload-required') {
-        setValidation({ key, state: 'reload', message: 'Z3 nécessite un rechargement pour être activé. La journée et ses réglages seront conservés ; relancez ensuite la vérification.' })
+        setValidation({ key, state: 'reload', message: 'Rechargez pour activer Z3. La journée sera conservée.' })
         return
       }
       const { verifyDayWithZ3 } = await import('@/lib/day-verifier')
       const ok = await verifyDayWithZ3(day, battery)
-      setValidation(ok ? { key, state: 'success', message: 'Bilans et contraintes de la journée vérifiés par Z3 pour ce modèle.' } : { key, state: 'error', message: 'Z3 a détecté une incohérence dans les bilans de la journée.' })
-    } catch (error) {
-      setValidation({ key, state: 'error', message: error instanceof Error ? `Vérification indisponible : ${error.message}` : 'Vérification Z3 indisponible.' })
-    }
+      setValidation(ok ? { key, state: 'success', message: 'Bilans de la journée vérifiés par Z3.' } : { key, state: 'error', message: 'Incohérence détectée par Z3.' })
+    } catch (error) { setValidation({ key, state: 'error', message: error instanceof Error ? `Vérification indisponible : ${error.message}` : 'Vérification Z3 indisponible.' }) }
   }
   const reloadForZ3 = () => {
-    try {
-      sessionStorage.setItem(savedDayKey, JSON.stringify({ rows, originalRows, battery, hourIndex, fileName } satisfies SavedDay))
-      window.location.reload()
-    } catch { setValidation({ key: validationKey, state: 'error', message: 'Impossible de conserver la journée pour le rechargement.' }) }
+    try { sessionStorage.setItem(savedDayKey, JSON.stringify({ rows, originalRows, battery, hourIndex, fileName } satisfies SavedDay)); window.location.reload() }
+    catch { setValidation({ key: validationKey, state: 'error', message: 'Impossible de conserver la journée.' }) }
   }
   const step = day?.steps[Math.min(hourIndex, day.steps.length - 1)]
-  const insight = step ? explanation(step, battery) : null
-  const hourNumber = step ? Number(step.hour.slice(0, 2)) : 0
-  const hourLabel = step ? `${step.hour.slice(0, 2)}:00 — ${String(hourNumber + 1).padStart(2, '0')}:00` : '—'
+  const outcome = step ? consequence(step, battery) : null
   const modified = rows.some((row, i) => row.productionMW !== originalRows[i]?.productionMW || row.consumptionMW !== originalRows[i]?.consumptionMW)
   useEffect(() => {
     if (!playing || !rows.length) return
@@ -136,35 +138,27 @@ function App() {
   const selectHour = (next: number) => { setHourIndex(Math.max(0, Math.min(rows.length - 1, next))); setPlaying(false) }
   const updateHour = (key: 'productionMW' | 'consumptionMW', value: number) => setRows(current => current.map((row, i) => i === hourIndex ? { ...row, [key]: value } : row))
   const updateBattery = (key: 'capacityMWh' | 'initialMWh' | 'maxChargeMW' | 'maxDischargeMW', value: number) => setBattery(current => ({ ...current, [key]: value, ...(key === 'capacityMWh' ? { initialMWh: Math.min(current.initialMWh, value) } : {}), ...(key === 'initialMWh' ? { initialMWh: Math.min(current.capacityMWh, value) } : {}) }))
-  const editTitles: Record<Site, { title: string; text: string; icon: typeof Wind }> = {
-    production: { title: 'Production', text: 'Modifiez la production pour cette heure uniquement.', icon: Wind },
-    consommation: { title: 'Consommation', text: 'Modifiez la demande pour cette heure uniquement.', icon: Factory },
-    batterie: { title: 'Batterie', text: 'Ces réglages s’appliquent à toute la journée.', icon: BatteryCharging },
-  }
-  const site = editTitles[selected], SiteIcon = site.icon
-  return <div className="app"><header className="topbar"><a href="#accueil" className="brand" aria-label="Île, accueil"><span className="brand-mark">◈</span> île<span className="brand-dot">.</span></a><span className="top-divider"/><span className="top-label">Laboratoire énergétique</span><div className="top-right"><span className="top-version">UNE JOURNÉE À EXPLORER</span><a href="https://github.com/nicolashedoire/ile-des-possibles" target="_blank" rel="noreferrer">GitHub <ArrowUpRight size={14}/></a></div></header>
-    <main id="accueil" className="main-content"><div className="breadcrumbs">LABORATOIRE <span>/</span> ÉNERGIE <span>/</span> <strong>SIMULATION</strong></div><div className="page-heading"><div><span className="eyebrow"><i/> UNE ÎLE, UNE JOURNÉE</span><h1>Chaque choix change <span>l’équilibre.</span></h1><p>Faites défiler la journée, explorez l’île et observez les conséquences.</p></div><div className="data-source"><span>SOURCE DES DONNÉES</span><strong><i/> {fileName}</strong></div></div>
-      {loadError && <div className="load-error" role="alert">{loadError} {rows.length ? 'Les données précédentes restent disponibles.' : ''}</div>}
-      {loading && !step ? <div className="loading-panel" role="status">{loadStatus}</div> : step && day && insight ? <>
-      <section className="workspace" aria-label="Exploration de l'île énergétique"><div className="scene-column"><div className="panel-header"><div><span className="eyebrow">VUE D’ENSEMBLE</span><h2>L’île à l’heure sélectionnée</h2></div><div className="hour-chip"><span/> {hourLabel}</div></div>
-        <div className="scene-wrap"><div className="scene-meta"><span>● &nbsp; MODÈLE PÉDAGOGIQUE</span><span>EXPLORATION 3D</span></div><div className="scene-canvas"><IslandScene productionMW={step.productionMW} consumptionMW={step.consumptionMW} batteryMWh={step.batteryEndMWh} deficitMW={Math.max(0, step.consumptionMW - step.productionMW)} chargeMW={step.chargeMW} dischargeMW={step.dischargeMW} unservedMW={step.unservedMW} selected={selected} onSelect={setSelected}/></div><div className="scene-hint">Faites glisser pour explorer · sélectionnez une installation</div></div>
-        <div className="site-tabs" role="group" aria-label="Explorer une installation"><button className={selected === 'production' ? 'active' : ''} onClick={() => setSelected('production')} aria-pressed={selected === 'production'}><Wind size={16}/><span>Production</span><strong>{fmt(step.productionMW)} <small>MW</small></strong></button><button className={selected === 'consommation' ? 'active' : ''} onClick={() => setSelected('consommation')} aria-pressed={selected === 'consommation'}><Factory size={16}/><span>Consommation</span><strong>{fmt(step.consumptionMW)} <small>MW</small></strong></button><button className={selected === 'batterie' ? 'active' : ''} onClick={() => setSelected('batterie')} aria-pressed={selected === 'batterie'}><Battery size={16}/><span>Batterie</span><strong>{fmt(step.batteryEndMWh)} <small>MWh</small></strong></button></div>
-      </div><aside className="inspector"><div className="inspector-head"><div><span className="eyebrow">ÉLÉMENT SÉLECTIONNÉ</span><h2><SiteIcon size={19}/> {site.title}</h2></div><SlidersHorizontal size={17}/></div><p className="inspector-copy">{site.text}</p>
-        <div className="inspector-fields">{selected === 'production' && <><ValueField label={`Production à ${step.hour}`} unit="MW" value={step.productionMW} onChange={value => updateHour('productionMW', value)}/><button className="incident" onClick={() => updateHour('productionMW', Math.round(step.productionMW * .5 * 10) / 10)}><CloudOff size={15}/><span>Simuler une baisse de 50 %</span><ArrowDownRight size={14}/></button><p className="field-note">La production est une valeur globale pour cette heure, pas une mesure par éolienne.</p></>}
-        {selected === 'consommation' && <><ValueField label={`Demande à ${step.hour}`} unit="MW" value={step.consumptionMW} onChange={value => updateHour('consumptionMW', value)}/><button className="incident" onClick={() => updateHour('consumptionMW', Math.min(1000, Math.round((step.consumptionMW + 10) * 10) / 10))}><Zap size={15}/><span>Ajouter une pointe de 10 MW</span><ArrowDownRight size={14}/></button><p className="field-note">Cette modification concerne uniquement l’heure sélectionnée.</p></>}
-        {selected === 'batterie' && <><ValueField label="Capacité" unit="MWh" value={battery.capacityMWh} onChange={value => updateBattery('capacityMWh', value)}/><ValueField label="Réserve initiale" unit="MWh" value={battery.initialMWh} onChange={value => updateBattery('initialMWh', value)} max={battery.capacityMWh}/><ValueField label="Charge max." unit="MW" value={battery.maxChargeMW} onChange={value => updateBattery('maxChargeMW', value)}/><ValueField label="Décharge max." unit="MW" value={battery.maxDischargeMW} onChange={value => updateBattery('maxDischargeMW', value)}/><p className="field-note">Rendements de charge et décharge : 95 % chacun. Les changements recalculent toute la journée.</p></>}
-        </div><div className="inspector-bottom"><span className="eyebrow">SCÉNARIO</span><button disabled={!modified && JSON.stringify(battery) === JSON.stringify(initialBattery)} onClick={() => {setRows(originalRows.map(row => ({...row}))); setBattery(initialBattery); setPlaying(false)}}><RotateCcw size={14}/> Rétablir les valeurs</button></div></aside></section>
-      <section className="timeline-panel" aria-label="Lecture de la journée"><div className="timeline-heading"><div><span className="eyebrow">LE TEMPS EN MOUVEMENT</span><h2>Parcourir la journée</h2><p>Chaque étape représente une heure complète.</p></div><div className="play-controls"><Button variant="outline" size="icon" aria-label="Heure précédente" onClick={() => selectHour(hourIndex - 1)} disabled={hourIndex === 0}><ArrowLeft size={16}/></Button><Button className="play-button" onClick={() => { if (hourIndex >= rows.length - 1) setHourIndex(0); setPlaying(!playing) }}>{playing ? <Pause size={15}/> : <Play size={15}/>} {playing ? 'Pause' : 'Lire la journée'}</Button><Button variant="outline" size="icon" aria-label="Heure suivante" onClick={() => selectHour(hourIndex + 1)} disabled={hourIndex === rows.length - 1}><ArrowRight size={16}/></Button><label className="speed-control">Vitesse <select value={speed} onChange={e => setSpeed(Number(e.target.value))} aria-label="Vitesse de lecture"><option value={.5}>0,5×</option><option value={1}>1×</option><option value={2}>2×</option></select></label></div></div>
-        <HourChart steps={day.steps} index={hourIndex} capacity={battery.capacityMWh} onChange={selectHour}/></section>
-      <section className="consequence" aria-label="Conséquences à l’heure sélectionnée"><div className="consequence-heading"><div><span className="eyebrow">À CETTE HEURE</span><h2>Que se passe-t-il ?</h2></div><span className={`state-pill ${step.unservedMW > epsilon ? 'shortage' : ''}`}><i/>{step.unservedMW > epsilon ? 'Demande non couverte' : 'Demande couverte'}</span></div>
-        <div className="metrics"><div className="metric"><span>Production</span><strong>{fmt(step.productionMW)} <small>MW</small></strong><p>Puissance disponible</p></div><div className="metric"><span>Consommation</span><strong>{fmt(step.consumptionMW)} <small>MW</small></strong><p>Puissance demandée</p></div><div className="metric"><span>Batterie en fin d’heure</span><strong>{fmt(step.batteryEndMWh)} <small>MWh</small></strong><p>Sur {fmt(battery.capacityMWh)} MWh de capacité</p><div className="battery-bar"><i style={{ width: `${battery.capacityMWh ? Math.min(100, step.batteryEndMWh / battery.capacityMWh * 100) : 0}%` }}/></div></div><div className="metric"><span>Énergie non servie</span><strong className={step.unservedMW > epsilon ? 'orange' : ''}>{fmt(step.unservedMW)} <small>MWh</small></strong><p>Sur cette heure</p></div></div>
-        <div className={`explanation ${step.unservedMW > epsilon ? 'alert' : ''}`}><span className="explanation-icon">{step.unservedMW > epsilon ? '!' : <Check size={15}/>}</span><div><span className="eyebrow">COMPRENDRE L’EFFET</span><h3>{insight.title}</h3><p>{insight.description}</p></div></div>
-        <div className="day-summary"><span><strong>{day.summary.hoursWithShortage} créneaux</strong> touchés par une pénurie</span><span><strong>{fmt(day.summary.totalUnservedMWh)} MWh</strong> non servis au total</span><span><strong>{fmt(day.summary.finalBatteryMWh)} MWh</strong> en fin de journée</span></div>
-        <div className="mt-5 flex flex-wrap items-center gap-3"><Button variant="outline" size="sm" onClick={() => void verifyDay()} disabled={activeValidation?.state === 'busy'}>{activeValidation?.state === 'busy' ? 'Vérification…' : 'Vérifier les bilans avec Z3'}</Button>{activeValidation?.state === 'reload' && <Button variant="outline" size="sm" onClick={reloadForZ3}>Recharger et conserver la journée</Button>}<p role="status" className="text-xs leading-5 text-zinc-600">{activeValidation?.message ?? 'Facultatif · vérifie les contraintes du modèle, sans prévoir la réalité · premier chargement : environ 9 Mo.'}</p></div></section>
-      <ScenarioCompare rows={rows} battery={battery} day={day} onApply={(referenceRows, referenceBattery) => { setRows(referenceRows); setBattery(referenceBattery); setHourIndex(0); setPlaying(false) }}/>
-      </> : <div className="loading-panel">Aucune donnée n’est disponible. Importez un fichier ou rechargez l’exemple.</div>}
-      <section className="data-import"><div><span className="eyebrow">DONNÉES LOCALES</span><h2>Changer de journée</h2><p>L’exemple est déjà chargé. Votre CSV reste dans votre navigateur.</p><small>1 à 24 heures consécutives · colonnes <code>heure</code>, <code>production_mw</code>, <code>consommation_mw</code> · heure au format HH:00.</small></div><div className="import-actions"><Button variant="outline" size="sm" onClick={() => void loadExample()} disabled={loading}><RotateCcw size={14}/> Recharger l’exemple</Button><label className={`import-button ${loading ? 'disabled' : ''}`}><Upload size={14}/>{loading ? 'Chargement…' : 'Importer un CSV'}<input type="file" accept=".csv,text/csv" disabled={loading} onChange={e => {const f = e.currentTarget.files?.[0]; e.currentTarget.value = ''; if (f) void load(async () => f, f.name)}}/></label>{loadStatus && <span role="status">{loadStatus}</span>}</div></section>
-      <section className="model-section"><button onClick={() => setShowModel(!showModel)} aria-expanded={showModel}><span className="model-icon"><CircleHelp size={16}/></span><span><strong>Comment fonctionne cette simulation ?</strong><small>Hypothèses, unités et limites du modèle</small></span><span className="model-expand">{showModel ? '−' : '+'}</span></button>{showModel && <div className="model-body"><p>Chaque ligne représente une heure à puissance constante. La production et la consommation sont exprimées en MW ; l’énergie de la batterie est en MWh. Le modèle calcule le stockage, les pertes, le surplus non stocké et l’énergie non servie, en respectant les limites de charge et de décharge.</p><p>Les données et installations sont fictives. Il s’agit d’un modèle pédagogique : il ne simule pas les flux électriques détaillés, les prévisions météorologiques ni les contraintes d’un réseau réel. La puissance des flux de la scène est schématique.</p><p>Le fichier d’exemple est toujours déficitaire : modifiez une heure pour créer un surplus et observer la recharge.</p></div>}</section>
-      <footer><span>◈ &nbsp; ÎLE &nbsp; / &nbsp; UN MONDE À COMPRENDRE</span><span>MODÈLE PÉDAGOGIQUE · DONNÉES FICTIVES</span></footer></main></div>
+  const selectSite = (site: Site) => { setSelected(site); setPanel(site); setMore(false) }
+  const reset = () => { setRows(originalRows.map(row => ({ ...row }))); setBattery(initialBattery); setPlaying(false) }
+  const inspector = panel === 'production' || panel === 'consommation' || panel === 'batterie'
+  const stepLabel = step ? `${step.hour.slice(0, 2)}h` : '—'
+  const siteName: Record<Site, string> = { production: 'Production', consommation: 'Consommation', batterie: 'Batterie' }
+  const panelName: Record<Exclude<Panel, null>, string> = { ...siteName, data: 'Données', compare: 'Comparer', help: 'Le modèle' }
+
+  return <div className="app-shell"><header className="topbar"><a href="#accueil" className="brand" aria-label="Île, accueil"><span className="brand-mark">◈</span>île<span className="brand-dot">.</span></a><span className="top-divider"/><span className="top-label">Laboratoire énergétique</span><div className="top-right"><span className="source-name" title={fileName}><span/> {loading ? 'Chargement' : fileName}</span><button className={`top-action ${panel === 'data' ? 'active' : ''}`} onClick={() => setPanel(panel === 'data' ? null : 'data')} aria-label="Données" title="Données"><Database size={16}/><span>Données</span></button><button className={`top-action ${panel === 'compare' ? 'active' : ''}`} onClick={() => setPanel(panel === 'compare' ? null : 'compare')} aria-label="Comparer les journées" title="Comparer les journées"><GitCompareArrows size={16}/><span>Comparer</span></button><button className={`top-action icon-only ${panel === 'help' ? 'active' : ''}`} onClick={() => setPanel(panel === 'help' ? null : 'help')} aria-label="À propos du modèle" title="À propos du modèle"><CircleHelp size={17}/></button></div></header>
+    <main id="accueil" className="experience" aria-label="Île énergétique interactive">
+      {step && day && outcome ? <>
+        <div className="world"><IslandScene productionMW={step.productionMW} consumptionMW={step.consumptionMW} batteryMWh={step.batteryEndMWh} deficitMW={Math.max(0, step.consumptionMW - step.productionMW)} chargeMW={step.chargeMW} dischargeMW={step.dischargeMW} unservedMW={step.unservedMW} selected={selected} onSelect={selectSite} annotationBottomInset={165} annotationRightInset={inspector && !narrow ? 290 : 0}/></div>
+        <div className="world-meta"><span><i/> SIMULATION</span><strong>{stepLabel}<small> — {String(Number(step.hour.slice(0, 2)) + 1).padStart(2, '0')}h</small></strong></div>
+        <div className="world-values" aria-label="Valeurs à l’heure sélectionnée"><button className={selected === 'production' && panel === 'production' ? 'active' : ''} onClick={() => selectSite('production')}><Wind size={15}/><span>Production</span><strong>{fmt(step.productionMW)}<small> MW</small></strong></button><button className={selected === 'consommation' && panel === 'consommation' ? 'active' : ''} onClick={() => selectSite('consommation')}><Factory size={15}/><span>Consommation</span><strong>{fmt(step.consumptionMW)}<small> MW</small></strong></button><button className={selected === 'batterie' && panel === 'batterie' ? 'active' : ''} onClick={() => selectSite('batterie')}><Battery size={15}/><span>Batterie</span><strong>{fmt(step.batteryEndMWh)}<small> MWh</small></strong></button></div>
+        <button className={`outcome ${outcome.danger ? 'danger' : ''}`} onClick={() => setMore(!more)} aria-expanded={more} aria-label={`${outcome.title} : ${outcome.detail}`}><span className="outcome-dot"/><span><strong>{outcome.title}</strong>{more && <small>{outcome.detail}</small>}</span><ChevronDown size={14} className={more ? 'rotate' : ''}/></button>
+        <IntegratedChart steps={day.steps} index={hourIndex} capacity={battery.capacityMWh} playing={playing} speed={speed} onChange={selectHour} onPlay={() => {if (hourIndex >= rows.length - 1) setHourIndex(0); setPlaying(!playing)}} onSpeed={() => setSpeed(speed === 1 ? 2 : speed === 2 ? .5 : 1)}/>
+        {inspector && <aside className="inspector-panel" aria-label={`Réglages ${panelName[panel]}`}><div className="panel-top"><div><small>RÉGLAGES · {panel === 'batterie' ? 'JOURNÉE' : stepLabel}</small><h2>{panelName[panel]}</h2></div><button className="close" onClick={() => setPanel(null)} aria-label="Fermer les réglages"><X size={16}/></button></div><div className="panel-fields">{panel === 'production' && <><ValueField label="Puissance" unit="MW" value={step.productionMW} onChange={value => updateHour('productionMW', value)}/><button className="scenario-action" onClick={() => updateHour('productionMW', Math.round(step.productionMW * .5 * 10) / 10)}><CloudOff size={15}/> Baisse de 50 % <ArrowDownRight size={14}/></button></>}{panel === 'consommation' && <><ValueField label="Demande" unit="MW" value={step.consumptionMW} onChange={value => updateHour('consumptionMW', value)}/><button className="scenario-action" onClick={() => updateHour('consumptionMW', Math.min(1000, Math.round((step.consumptionMW + 10) * 10) / 10))}><Zap size={15}/> Pointe de 10 MW <ArrowDownRight size={14}/></button></>}{panel === 'batterie' && <><ValueField label="Capacité" unit="MWh" value={battery.capacityMWh} onChange={value => updateBattery('capacityMWh', value)}/><ValueField label="Réserve initiale" unit="MWh" value={battery.initialMWh} onChange={value => updateBattery('initialMWh', value)} max={battery.capacityMWh}/><ValueField label="Charge max." unit="MW" value={battery.maxChargeMW} onChange={value => updateBattery('maxChargeMW', value)}/><ValueField label="Décharge max." unit="MW" value={battery.maxDischargeMW} onChange={value => updateBattery('maxDischargeMW', value)}/><small className="efficiency">Rendements de charge et décharge : 95 %</small></>}</div><button className="reset-action" disabled={!modified && JSON.stringify(battery) === JSON.stringify(initialBattery)} onClick={reset}><RotateCcw size={13}/> Rétablir les valeurs</button></aside>}
+        {panel === 'compare' && <div className="dialog-backdrop" onClick={() => setPanel(null)}><div className="dialog-panel compare-dialog" role="dialog" aria-modal="true" aria-label="Comparer les journées" onClick={e => e.stopPropagation()}><button className="dialog-close" onClick={() => setPanel(null)} aria-label="Fermer"><X size={16}/></button><ScenarioCompare rows={rows} battery={battery} day={day} onApply={(referenceRows, referenceBattery) => {setRows(referenceRows); setBattery(referenceBattery); setHourIndex(0); setPlaying(false); setPanel(null)}}/></div></div>}
+      </> : <div className="loading-state" role="status"><span className="loader"/>{loading ? loadStatus : 'Aucune donnée chargée'}</div>}
+      {loadError && <div className="error-toast" role="alert">{loadError}<button onClick={() => setLoadError('')} aria-label="Fermer"><X size={14}/></button></div>}
+      {panel === 'data' && <aside className="utility-panel" aria-label="Données"><div className="panel-top"><div><small>JOURNÉE</small><h2>Données</h2></div><button className="close" onClick={() => setPanel(null)} aria-label="Fermer"><X size={16}/></button></div><div className="source-card"><Database size={16}/><span><strong>{fileName}</strong><small>{loadStatus}</small></span></div><button className="utility-action" onClick={() => {void loadExample(); setPanel(null)}} disabled={loading}><RotateCcw size={15}/> Recharger l’exemple</button><label className={`utility-action ${loading ? 'disabled' : ''}`}><Upload size={15}/> Importer un CSV<input type="file" accept=".csv,text/csv" disabled={loading} onChange={event => {const f = event.currentTarget.files?.[0]; event.currentTarget.value = ''; if (f) {void load(async () => f, f.name); setPanel(null)}}}/></label><small className="utility-note">CSV horaire · heure, production_mw, consommation_mw<br/>Les données restent sur cet appareil.</small></aside>}
+      {panel === 'help' && <aside className="utility-panel" aria-label="À propos du modèle"><div className="panel-top"><div><small>SIMULATION</small><h2>Le modèle</h2></div><button className="close" onClick={() => setPanel(null)} aria-label="Fermer"><X size={16}/></button></div><div className="help-lines"><p>1 pas = 1 heure · MW = puissance · MWh = énergie.</p><p>Les données sont fictives. Les flux 3D sont schématiques.</p><p>Charge et décharge : rendement de 95 %. Sans import électrique extérieur.</p></div><button className="utility-action" onClick={() => void verifyDay()} disabled={!day || activeValidation?.state === 'busy'}><BatteryCharging size={15}/> {activeValidation?.state === 'busy' ? 'Vérification…' : 'Vérifier les bilans avec Z3'}</button>{activeValidation?.state === 'reload' && <button className="utility-action" onClick={reloadForZ3}>Recharger et conserver la journée</button>}<small role="status" className="utility-note">{activeValidation?.message ?? 'Z3 vérifie le modèle, pas une prévision réelle. Chargement facultatif : environ 9 Mo.'}</small></aside>}
+    </main></div>
 }
 export default App

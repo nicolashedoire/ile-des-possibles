@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js'
 import { layoutWithLines, prepareWithSegments } from '@chenglou/pretext'
 import { placeAnnotations, type Rect } from './annotation-layout'
 
@@ -14,20 +16,24 @@ type IslandSceneProps = {
   unservedMW?: number
   selected?: 'production' | 'consommation' | 'batterie'
   onSelect?: (id: 'production' | 'consommation' | 'batterie') => void
+  /** Space occupied by UI overlays, excluded when placing 3D labels. */
+  annotationBottomInset?: number
+  annotationRightInset?: number
 }
 
 type SceneValues = IslandSceneProps
 
-/** A small, deliberately schematic 3D representation, not a power-flow simulation. */
+/** Generated interactive island, with a procedural fallback; not a power-flow simulation. */
 export default function IslandScene(values: IslandSceneProps) {
   const host = useRef<HTMLDivElement>(null)
   const currentValues = useRef<SceneValues>(values)
   const refreshAnnotations = useRef<(() => void) | null>(null)
   const focusInstallation = useRef<((id: 'production' | 'consommation' | 'batterie') => void) | null>(null)
   const [webglUnavailable, setWebglUnavailable] = useState(false)
+  const [modelUnavailable, setModelUnavailable] = useState(false)
   const formatAccessible = (value: number) => new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 }).format(value)
   currentValues.current = values
-  useEffect(() => { refreshAnnotations.current?.() }, [values.productionMW, values.consumptionMW, values.batteryMWh])
+  useEffect(() => { refreshAnnotations.current?.() }, [values.productionMW, values.consumptionMW, values.batteryMWh, values.annotationBottomInset, values.annotationRightInset])
   useEffect(() => { if (values.selected) focusInstallation.current?.(values.selected) }, [values.selected])
 
   useEffect(() => {
@@ -95,6 +101,20 @@ export default function IslandScene(values: IslandSceneProps) {
     const lineMaterial = new THREE.MeshBasicMaterial({ color: 0xa3f5d3 })
     const system = new THREE.Group()
     scene.add(system)
+    // A generated model is loaded asynchronously. Until it is ready the
+    // procedural island remains the complete, interactive fallback.
+    const generatedIsland = new THREE.Group()
+    generatedIsland.visible = false
+    scene.add(generatedIsland)
+    let usingGeneratedIsland = false
+    let generatedGroundY = .19
+    let destroyed = false
+    type GeneratedFlow = { path: THREE.CatmullRomCurve3; tube: THREE.Mesh; markers: THREE.Mesh[]; kind: 'production' | 'load' | 'battery' }
+    const generatedFlows: GeneratedFlow[] = []
+    const generatedFlowMaterial = new THREE.MeshBasicMaterial({ color: 0x9bf5d2, transparent: true, opacity: .83, depthWrite: false })
+    // Both the markers and the connections respect the mesh's depth so the
+    // schematic animation does not float through the building facades.
+    const generatedMarkerMaterial = new THREE.MeshBasicMaterial({ color: 0xa7dbbe, transparent: true, opacity: .72, depthTest: true, depthWrite: false })
 
     // A layered, asymmetrical rock shelf and an irregular grass cap. Every
     // vertex is deterministic so camera rotations preserve the same island.
@@ -357,14 +377,27 @@ export default function IslandScene(values: IslandSceneProps) {
     // The callback never changes the energy model by itself.
     const raycaster = new THREE.Raycaster()
     const pointer = new THREE.Vector2()
-    const selectable = [...turbineGroups, battery, factory, ...houseGroups]
+    const selectable: THREE.Object3D[] = [...turbineGroups, battery, factory, ...houseGroups]
     let pointerStart: { x: number; y: number } | null = null
     const onPointerDown = (event: PointerEvent) => { pointerStart = { x: event.clientX, y: event.clientY } }
-    const pickInstallation = (event: PointerEvent): 'production' | 'consommation' | 'batterie' | undefined => {
+    const pickInstallation = (event: PointerEvent, precise = false): 'production' | 'consommation' | 'batterie' | undefined => {
       const rect = renderer.domElement.getBoundingClientRect()
       if (!rect.width || !rect.height) return undefined
       pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1)
       raycaster.setFromCamera(pointer, camera)
+      if (usingGeneratedIsland && precise) {
+        // A broad transparent box may cross the ray before the visible target.
+        // Classify the actual surface point instead; only clicks perform this
+        // expensive full-mesh raycast, never pointer movement or animation.
+        const model = generatedIsland.children[0]
+        const hit = model && raycaster.intersectObject(model, true)[0]
+        if (!hit) return undefined
+        const ids = ['production', 'batterie', 'consommation'] as const
+        const candidates = siteBoxes.map((box, i) => ({ box, id: ids[i] })).filter(item => item.box.containsPoint(hit.point))
+        if (candidates.length === 0) return undefined
+        candidates.sort((a, b) => a.box.getCenter(new THREE.Vector3()).distanceToSquared(hit.point) - b.box.getCenter(new THREE.Vector3()).distanceToSquared(hit.point))
+        return candidates[0].id
+      }
       const hit = raycaster.intersectObjects(selectable, true)[0]
       let target: THREE.Object3D | null | undefined = hit?.object
       while (target && !target.userData.installation) target = target.parent
@@ -374,7 +407,7 @@ export default function IslandScene(values: IslandSceneProps) {
     const onPointerUp = (event: PointerEvent) => {
       if (!pointerStart || Math.hypot(event.clientX - pointerStart.x, event.clientY - pointerStart.y) > 6) { pointerStart = null; return }
       pointerStart = null
-      const id = pickInstallation(event)
+      const id = pickInstallation(event, true)
       if (id) currentValues.current.onSelect?.(id)
     }
     const onPointerMove = (event: PointerEvent) => {
@@ -391,14 +424,21 @@ export default function IslandScene(values: IslandSceneProps) {
       consommation: new THREE.Vector3(1.8, .55, .45),
       batterie: new THREE.Vector3(.3, .55, -1.55),
     }
+    const homeTarget = new THREE.Vector3(0, .5, 0)
     const desiredTarget = new THREE.Vector3()
     let focusing = false
-    focusInstallation.current = (id) => { desiredTarget.copy(focusPosition[id]); focusing = true }
+    focusInstallation.current = (id) => {
+      // On narrow screens the context panel occupies much of the view. A
+      // focus pan pushes the island outside the viewport, so selection still
+      // opens the panel and highlights the site without moving the camera.
+      if (element.clientWidth < 700) { focusing = false; return }
+      desiredTarget.copy(focusPosition[id]); focusing = true
+    }
     const selectionMaterial = new THREE.MeshBasicMaterial({ color: 0xa7ffdc, transparent: true, opacity: .85, side: THREE.DoubleSide })
     const selectionRing = new THREE.Mesh(new THREE.RingGeometry(.66, .69, 64), selectionMaterial)
     selectionRing.rotation.x = -Math.PI / 2
     selectionRing.visible = false
-    system.add(selectionRing)
+    scene.add(selectionRing)
 
     // Annotate actual installations using their projected 3D bounding boxes. The
     // backing positions are recalculated as the camera moves, without rebuilding
@@ -437,10 +477,12 @@ export default function IslandScene(values: IslandSceneProps) {
       annotationFrame = 0
       lastAnnotation = performance.now()
       const width = element.clientWidth, height = element.clientHeight
-      if (width < 520 || height < 240) { nodes.forEach(node => { node.style.display = 'none' }); return }
+      const values = currentValues.current
+      const usableWidth = Math.max(0, width - Math.max(0, values.annotationRightInset ?? 0))
+      const usableHeight = Math.max(0, height - Math.max(0, values.annotationBottomInset ?? 0))
+      if (usableWidth < 520 || usableHeight < 200) { nodes.forEach(node => { node.style.display = 'none' }); return }
       camera.updateMatrixWorld()
       const boxes = siteBoxes.map(box => projectBox(box, width, height))
-      const values = currentValues.current
       const fmt = (n: number) => new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 }).format(n)
       const texts = [`Production totale : ${fmt(values.productionMW)} MW`, `Batterie : ${fmt(values.batteryMWh)} MWh disponibles`, `Consommation : ${fmt(values.consumptionMW)} MW`]
       const key = texts.join('|')
@@ -456,7 +498,7 @@ export default function IslandScene(values: IslandSceneProps) {
       const obstacles = [...boxes, ...otherBoxes.map(box => projectBox(box, width, height))].filter((box): box is Rect => box !== null)
       const requests = boxes.flatMap((box, i) => box ? [{ id: String(i), anchor: box, width: 146, height: cachedLabels[i].height }] : [])
       let placed
-      try { placed = placeAnnotations(requests, width, height, obstacles) }
+      try { placed = placeAnnotations(requests, usableWidth, usableHeight, obstacles) }
       catch { nodes.forEach(node => { node.style.display = 'none' }); return }
       nodes.forEach((node, i) => {
         const placement = placed.find(item => item.id === String(i))
@@ -485,15 +527,21 @@ export default function IslandScene(values: IslandSceneProps) {
     const resize = () => {
       const width = Math.max(1, element.clientWidth)
       const height = Math.max(1, element.clientHeight)
+      if (width < 700 && controls.target.distanceToSquared(homeTarget) > .0001) {
+        camera.position.add(homeTarget.clone().sub(controls.target))
+        controls.target.copy(homeTarget)
+        focusing = false
+      }
       camera.aspect = width / height
       camera.fov = 36
       camera.updateProjectionMatrix()
       // Fit the entire modeled scene, not a fixed distance: the same framing
       // therefore remains usable for narrow, square and wide panels.
-      system.updateWorldMatrix(true, true)
+      const visibleIsland = usingGeneratedIsland ? generatedIsland : system
+      visibleIsland.updateWorldMatrix(true, true)
       const objectCorners: THREE.Vector3[] = []
-      system.traverse(object => {
-        if (!(object instanceof THREE.Mesh) || object === selectionRing) return
+      visibleIsland.traverse(object => {
+        if (!(object instanceof THREE.Mesh) || object === selectionRing || object.userData.installation) return
         const geometry = object.geometry
         if (!geometry.boundingBox) geometry.computeBoundingBox()
         const box = geometry.boundingBox
@@ -513,6 +561,9 @@ export default function IslandScene(values: IslandSceneProps) {
         const point = corner.sub(controls.target).applyQuaternion(inverseRotation)
         distance = Math.max(distance, point.z + Math.abs(point.x) / (vertical * camera.aspect * 0.94), point.z + Math.abs(point.y) / (vertical * 0.94))
       }
+      // The generated island's bounds include empty corners around its tall
+      // turbine; a modest mobile crop reduction makes the real geometry legible.
+      if (usingGeneratedIsland && width < 600) distance *= .88
       homeDistance = distance
       camera.position.copy(controls.target).addScaledVector(direction, distance)
       controls.update()
@@ -523,12 +574,121 @@ export default function IslandScene(values: IslandSceneProps) {
     observer.observe(element)
     resize()
 
+    // Meshy assets can contain just one fused mesh. The invisible pick volumes
+    // are therefore independent of mesh names, and serve as the same anchors for
+    // picking, camera focus and projected explanatory labels. They are calibrated
+    // against the normalized island once the actual generated model is available.
+    const disposeGenerated = (root: THREE.Object3D) => {
+      const geometries = new Set<THREE.BufferGeometry>()
+      const materials = new Set<THREE.Material>()
+      const textures = new Set<THREE.Texture>()
+      root.traverse(object => {
+        if (!(object instanceof THREE.Mesh)) return
+        geometries.add(object.geometry)
+        const itemMaterials = Array.isArray(object.material) ? object.material : [object.material]
+        itemMaterials.forEach(material => {
+          materials.add(material)
+          Object.values(material).forEach(value => { if (value instanceof THREE.Texture) textures.add(value) })
+        })
+      })
+      geometries.forEach(geometry => geometry.dispose())
+      textures.forEach(texture => texture.dispose())
+      materials.forEach(material => material.dispose())
+    }
+    new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).load(`${import.meta.env.BASE_URL}assets/meshy/island.glb`, gltf => {
+      const model = gltf.scene
+      if (destroyed) { disposeGenerated(model); return }
+      const bounds = new THREE.Box3().setFromObject(model)
+      const size = bounds.getSize(new THREE.Vector3())
+      const center = bounds.getCenter(new THREE.Vector3())
+      const span = Math.max(size.x, size.z)
+      if (!Number.isFinite(span) || span < 1e-6 || !Number.isFinite(size.y)) {
+        disposeGenerated(model)
+        setModelUnavailable(true)
+        return
+      }
+      const scale = 10 / span
+      model.scale.setScalar(scale)
+      model.position.set(-center.x * scale, -bounds.min.y * scale, -center.z * scale)
+      model.traverse(object => {
+        if (!(object instanceof THREE.Mesh)) return
+        object.castShadow = true
+        object.receiveShadow = true
+      })
+      generatedIsland.add(model)
+      generatedIsland.updateWorldMatrix(true, true)
+      const normalized = new THREE.Box3().setFromObject(model)
+      const dimensions = normalized.getSize(new THREE.Vector3())
+      const baseY = normalized.min.y
+      const height = dimensions.y
+      generatedGroundY = baseY + height * .38
+      const definitions: Array<{ id: 'production' | 'batterie' | 'consommation'; x: number; y: number; z: number; w: number; h: number; d: number }> = [
+        { id: 'production', x: normalized.min.x + dimensions.x * .22, y: baseY + height * .62, z: normalized.min.z + dimensions.z * .50, w: dimensions.x * .18, h: height * .76, d: dimensions.z * .20 },
+        { id: 'batterie', x: normalized.min.x + dimensions.x * .29, y: baseY + height * .46, z: normalized.min.z + dimensions.z * .73, w: dimensions.x * .24, h: height * .28, d: dimensions.z * .25 },
+        { id: 'consommation', x: normalized.min.x + dimensions.x * .64, y: baseY + height * .46, z: normalized.min.z + dimensions.z * .82, w: dimensions.x * .42, h: height * .32, d: dimensions.z * .35 },
+      ]
+      const hitMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false })
+      const hits = definitions.map(({ id, x, y, z, w, h, d }) => {
+        const hit = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), hitMaterial)
+        hit.position.set(x, y, z)
+        hit.userData.installation = id
+        generatedIsland.add(hit)
+        focusPosition[id].set(x, Math.max(baseY, y - h * .25), z)
+        return hit
+      })
+      generatedIsland.updateWorldMatrix(true, true)
+      siteBoxes[0].setFromObject(hits[0])
+      siteBoxes[1].setFromObject(hits[1])
+      siteBoxes[2].setFromObject(hits[2])
+      otherBoxes.length = 0
+      selectable.splice(0, selectable.length, ...hits)
+      // These light paths are symbolic links, not a physical network model.
+      // Their visibility and movement are driven by the hour's calculated
+      // production, served demand and battery charge/discharge values.
+      // The imported mesh's modeled terrain rises above its nominal base;
+      // keep the schematic links just clear of that irregular surface.
+      const y = generatedGroundY + .48
+      const point = (x: number, z: number) => new THREE.Vector3(x, y, z)
+      const turbine = point(definitions[0].x, definitions[0].z)
+      const store = point(definitions[1].x, definitions[1].z)
+      const load = point(definitions[2].x, definitions[2].z)
+      const junction = point(normalized.min.x + dimensions.x * .43, normalized.min.z + dimensions.z * .61)
+      const specifications: Array<{ kind: GeneratedFlow['kind']; points: THREE.Vector3[] }> = [
+        { kind: 'production', points: [turbine, point(turbine.x + .35, turbine.z + .65), junction] },
+        { kind: 'load', points: [junction, point(junction.x + .9, junction.z + .85), load] },
+        { kind: 'battery', points: [junction, point(store.x + .15, store.z - .4), store] },
+      ]
+      for (const spec of specifications) {
+        const path = new THREE.CatmullRomCurve3(spec.points)
+        const tube = new THREE.Mesh(new THREE.TubeGeometry(path, 36, .024, 6, false), generatedFlowMaterial)
+        generatedIsland.add(tube)
+        const markers = Array.from({ length: 3 }, () => {
+          const marker = new THREE.Mesh(new THREE.SphereGeometry(.035, 10, 8), generatedMarkerMaterial)
+          marker.renderOrder = 5
+          generatedIsland.add(marker)
+          return marker
+        })
+        generatedFlows.push({ path, tube, markers, kind: spec.kind })
+      }
+      system.visible = false
+      usingGeneratedIsland = true
+      generatedIsland.visible = true
+      homeTarget.set(0, Math.min(height * .4, 1.1), 0)
+      controls.target.copy(homeTarget)
+      resize()
+      scheduleAnnotations()
+    }, undefined, () => {
+      // No generated asset (or network/format failure): keep the existing island
+      // and tell the visitor that the fallback is shown.
+      if (!destroyed) setModelUnavailable(true)
+    })
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home'].includes(event.key)) return
       event.preventDefault()
       if (event.key === 'Home') {
         focusing = false
-        controls.target.set(0, .5, 0)
+        controls.target.copy(homeTarget)
         camera.position.copy(controls.target).addScaledVector(homeDirection, homeDistance)
       } else {
         const direction = new THREE.Vector3().subVectors(camera.position, controls.target)
@@ -561,7 +721,7 @@ export default function IslandScene(values: IslandSceneProps) {
       selectionRing.visible = Boolean(selected)
       if (selected) {
         const pos = focusPosition[selected]
-        selectionRing.position.set(pos.x, .19, pos.z)
+        selectionRing.position.set(pos.x, usingGeneratedIsland ? generatedGroundY : .19, pos.z)
       }
       if (focusing) {
         const before = controls.target.clone()
@@ -575,6 +735,22 @@ export default function IslandScene(values: IslandSceneProps) {
         const direction = marker.pathIndex === 3 && (state.chargeMW ?? 0) > 0 ? -1 : 1
         const progress = ((marker.phase + (reducedMotion ? 0 : direction * elapsed * .055)) % 1 + 1) % 1
         marker.path.getPointAt(progress, marker.mesh.position)
+      }
+      if (usingGeneratedIsland) {
+        generatedFlowMaterial.color.setHex(stressed ? 0xf2ba75 : 0x9bf5d2)
+        generatedMarkerMaterial.color.setHex(stressed ? 0xd6a678 : 0xa7dbbe)
+        for (const flow of generatedFlows) {
+          const power = flow.kind === 'production'
+            ? Math.min(Math.max(0, state.productionMW), Math.max(0, state.consumptionMW) + Math.max(0, state.chargeMW ?? 0))
+            : flow.kind === 'load' ? Math.max(0, state.consumptionMW - (state.unservedMW ?? 0)) : Math.max(state.chargeMW ?? 0, state.dischargeMW ?? 0)
+          flow.tube.visible = power > .001
+          const reverse = flow.kind === 'battery' && (state.dischargeMW ?? 0) > 0
+          flow.markers.forEach((marker, i) => {
+            marker.visible = power > .001
+            const progress = ((i / flow.markers.length + (reducedMotion ? 0 : (reverse ? -1 : 1) * elapsed * .055)) % 1 + 1) % 1
+            flow.path.getPointAt(progress, marker.position)
+          })
+        }
       }
       controls.update()
       renderer.render(scene, camera)
@@ -598,18 +774,23 @@ export default function IslandScene(values: IslandSceneProps) {
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
       renderer.domElement.removeEventListener('pointercancel', onPointerCancel)
       focusInstallation.current = null
+      destroyed = true
       const geometries = new Set<THREE.BufferGeometry>()
       const materials = new Set<THREE.Material>()
+      const textures = new Set<THREE.Texture>()
       scene.traverse(object => {
         if (object instanceof THREE.Mesh || object instanceof THREE.LineSegments) {
           geometries.add(object.geometry)
           const objectMaterials = Array.isArray(object.material) ? object.material : [object.material]
-          objectMaterials.forEach(material => materials.add(material))
+          objectMaterials.forEach(material => {
+            materials.add(material)
+            Object.values(material).forEach(value => { if (value instanceof THREE.Texture) textures.add(value) })
+          })
         }
       })
       geometries.forEach(geometry => geometry.dispose())
+      textures.forEach(texture => texture.dispose())
       materials.forEach(material => material.dispose())
-      meadowTexture?.dispose()
       renderer.dispose()
       renderer.domElement.remove()
     }
@@ -619,7 +800,8 @@ export default function IslandScene(values: IslandSceneProps) {
     ref={host}
     role="img"
     tabIndex={0}
-    aria-label={`Maquette 3D de l’île : production totale ${formatAccessible(values.productionMW)} MW, batterie ${formatAccessible(values.batteryMWh)} MWh, consommation ${formatAccessible(values.consumptionMW)} MW. Cliquez sur une installation pour ouvrir ses réglages. Faites glisser pour tourner la vue ; au clavier, utilisez les flèches et la touche début pour réinitialiser. Les boutons d'installation associés permettent aussi l'accès au clavier.`}
+    aria-label={webglUnavailable ? 'La vue 3D est indisponible. Les paramètres et les résultats restent accessibles dans les panneaux.' : `${modelUnavailable ? 'Vue simplifiée : modèle généré indisponible. ' : ''}Maquette 3D de l’île : production totale ${formatAccessible(values.productionMW)} MW, batterie ${formatAccessible(values.batteryMWh)} MWh, consommation ${formatAccessible(values.consumptionMW)} MW. Cliquez sur une installation pour ouvrir ses réglages. Faites glisser pour tourner la vue ; au clavier, utilisez les flèches et la touche début pour réinitialiser. Les boutons d'installation associés permettent aussi l'accès au clavier.`}
     style={{ position: 'relative', width: '100%', height: '100%', minHeight: 280, overflow: 'hidden', background: '#090909', cursor: webglUnavailable ? 'default' : 'grab', outlineOffset: '-3px' }}
-  >{webglUnavailable && <div style={{ color: '#a1a1aa', padding: '2rem', fontSize: '0.875rem', lineHeight: 1.6 }}>La vue 3D n’est pas disponible dans ce navigateur. Les paramètres et les résultats restent accessibles dans les panneaux autour de la carte.</div>}</div>
+  >{webglUnavailable && <div style={{ color: '#a1a1aa', padding: '2rem', fontSize: '0.875rem', lineHeight: 1.6 }}>La vue 3D n’est pas disponible dans ce navigateur. Les paramètres et les résultats restent accessibles dans les panneaux autour de la carte.</div>}
+  {modelUnavailable && !webglUnavailable && <div role="status" style={{ position: 'absolute', left: 12, bottom: Math.max(12, (values.annotationBottomInset ?? 0) + 8), zIndex: 2, padding: '5px 8px', borderRadius: 5, border: '1px solid rgba(255,255,255,.22)', background: 'rgba(15,15,17,.86)', color: '#e4e4e7', fontSize: 11, lineHeight: 1.4, pointerEvents: 'none' }}>Vue simplifiée · modèle indisponible</div>}</div>
 }

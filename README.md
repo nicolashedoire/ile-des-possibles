@@ -11,7 +11,7 @@
 
 ## Une journée à explorer
 
-Une journée fictive de 24 heures se charge automatiquement à l'ouverture : aucun fichier à télécharger. Lancez la lecture ou choisissez directement une heure pour observer la production, la demande, la réserve de la batterie et les conséquences d'un éventuel manque d'énergie.
+Une journée fictive de 24 heures se charge automatiquement à l'ouverture : aucun fichier à télécharger. Dans une vue unique, lancez la lecture ou sélectionnez une heure directement sur le graphique superposé à l'île. Les courbes de production, de consommation et de réserve utilisent leurs échelles respectives.
 
 - Cliquez sur une installation de la maquette 3D ou sur les commandes accessibles au clavier pour ouvrir ses réglages.
 - Modifiez la production ou la consommation d'une heure, ou ajustez les capacités de la batterie pour toute la période. Le modèle recalcule alors les heures suivantes.
@@ -21,7 +21,7 @@ Une journée fictive de 24 heures se charge automatiquement à l'ouverture : auc
 
 Les données d'exemple sont **fictives**. Elles sont déficitaires à toutes les heures : la réserve s'épuise progressivement. Pour explorer aussi la recharge, choisissez une heure et augmentez la production au-dessus de la consommation ; la batterie absorbera alors le surplus dans les limites de sa capacité et de sa puissance de charge.
 
-La maquette est une interprétation 3D stylisée de l'image de couverture. Les lignes et mouvements sont schématiques : ils ne constituent pas un calcul détaillé de flux électriques.
+La maquette 3D a été générée avec Meshy à partir de l'image de couverture, puis optimisée pour le Web. Les installations peuvent être sélectionnées directement ; les pales sont fixes car le modèle généré est un maillage unique. Les indications de flux restent schématiques : elles ne constituent pas un calcul détaillé de réseau électrique.
 
 ## Règles du modèle
 
