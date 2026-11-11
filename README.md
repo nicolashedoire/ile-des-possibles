@@ -19,10 +19,12 @@ L'ambition du projet est d'explorer une autre façon d'apprendre : **agir sur un
 
 1. Faites varier la production, la consommation, l'énergie stockée ou la puissance maximale de la batterie.
 2. Observez le bilan et l'autonomie se recalculer instantanément.
-3. Sélectionnez un élément de l'île pour en découvrir le rôle.
-4. Ouvrez les hypothèses du modèle en bas de la page.
+3. Tournez la maquette 3D et sélectionnez un élément pour en découvrir le rôle. Les flux affichés sont schématiques.
+4. Essayez « Tenir une heure » : des propositions calculées peuvent être appliquées au scénario. La vérification Z3 est facultative et nécessite une activation puis un rechargement.
+5. Enregistrez une référence pour comparer deux scénarios ou partagez-la manuellement sous forme de fichier.
+6. Importez un CSV local contenant `production_mw` et `consommation_mw` pour appliquer les moyennes au modèle.
 
-L'interface est utilisable à la souris et au clavier et s'adapte aux petits écrans. [Pretext](https://github.com/chenglou/pretext) est utilisé pour répartir les lignes de l'explication autour d'un élément visuel lorsque la largeur disponible change.
+L'interface est utilisable à la souris et au clavier et s'adapte aux petits écrans. [Pretext](https://github.com/chenglou/pretext) calcule les lignes de l'explication selon la largeur disponible.
 
 ## Le modèle en un exemple
 
@@ -59,11 +61,15 @@ npm run build
 
 - **React, TypeScript et Vite** pour l'application côté navigateur.
 - **Tailwind CSS et composants shadcn/ui** pour une interface simple et accessible.
-- **Pretext** pour mesurer et disposer les lignes de l'explication.
-- **SVG** pour représenter l'île et ses éléments interactifs.
+- **Three.js** pour la maquette 3D ; **Pretext**, **RBush** et **polygon-clipping** pour mesurer et positionner des annotations autour des installations visibles.
+- **math.js** pour construire des propositions simples ; **Z3**, en option, vérifie leurs contraintes dans le navigateur.
+- **DuckDB-Wasm** pour calculer les moyennes d'un fichier CSV local.
+- **Automerge** pour enregistrer et partager par fichier un scénario de référence.
 - Un modèle de calcul indépendant de l'interface, accompagné de tests.
 
-Le prototype fonctionne localement, sans compte ni serveur de données. La comparaison de scénarios, la collaboration, les jeux de données réels et les contraintes avancées sont des pistes d'évolution, pas des fonctionnalités déjà présentes.
+Le prototype fonctionne sans compte ni serveur de données. L'import CSV et les références restent dans le navigateur jusqu'à un export volontaire. L'activation facultative de Z3 enregistre un service worker pour permettre l'isolation nécessaire à WebAssembly et exige un rechargement ; le scénario en cours est conservé dans le stockage de session. Ce service worker ne stocke pas les données du scénario.
+
+La collaboration en direct, la recherche exhaustive ou l'optimisation économique, ainsi que l'intégration de Tone.js, d'un LLM et de Jev restent des pistes : elles ne sont pas encore implémentées. Les propositions sont des alternatives simples, pas une liste exhaustive de solutions.
 
 ## La suite à explorer
 
