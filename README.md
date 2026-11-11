@@ -26,6 +26,14 @@ L'ambition du projet est d'explorer une autre façon d'apprendre : **agir sur un
 
 L'interface est utilisable à la souris et au clavier et s'adapte aux petits écrans. [Pretext](https://github.com/chenglou/pretext) calcule les lignes de l'explication selon la largeur disponible.
 
+### Essayer avec une journée fictive
+
+[Télécharger le CSV d'exemple](public/energy-example.csv) : il contient 24 lignes, une par heure, avec des puissances de production et de consommation inventées en MW. Dans l'application, choisissez **Importer un CSV** et sélectionnez ce fichier.
+
+L'import actuel calcule uniquement les moyennes : **25,5 MW** de production et **42 MW** de consommation. Avec la batterie initiale de **10 MWh** et sa puissance maximale de **20 MW**, le modèle indique un déficit de **16,5 MW** et une autonomie d'environ **36 min 22 s**. Cliquez sur **Calculer les options** pour explorer des modifications qui permettraient de couvrir le déficit pendant une heure.
+
+La colonne `heure` est fournie pour situer les données, mais elle est ignorée pour l'instant. L'application ne rejoue pas la journée : elle ne calcule ni les pics horaires ni l'évolution de la batterie au cours du temps. Ces données fictives ne sont pas des mesures ni des prévisions.
+
 ## Le modèle en un exemple
 
 Avec **30 MW** de production, **40 MW** de consommation et **10 MWh** disponibles en batterie, le déficit est de **10 MW**. Si la batterie peut fournir cette puissance, elle le couvre théoriquement pendant **1 heure**.
